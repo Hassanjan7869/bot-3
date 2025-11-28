@@ -19,7 +19,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import random
 
-# 🔐 DATABASE FUNCTIONS
+# 🔐 DATABASE FUNCTIONS - FIXED VERSION
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('hassan_dastagir.db', check_same_thread=False)
@@ -38,7 +38,7 @@ class Database:
             )
         ''')
         
-        # User config table
+        # User config table - FIXED SCHEMA
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_config (
                 user_id INTEGER PRIMARY KEY,
@@ -57,6 +57,16 @@ class Database:
             )
         ''')
         
+        # Check if columns exist, if not add them
+        cursor.execute("PRAGMA table_info(user_config)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'last_cookie_refresh' not in columns:
+            cursor.execute('ALTER TABLE user_config ADD COLUMN last_cookie_refresh TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        
+        if 'cookie_refresh_count' not in columns:
+            cursor.execute('ALTER TABLE user_config ADD COLUMN cookie_refresh_count INTEGER DEFAULT 0')
+        
         self.conn.commit()
     
     def create_user(self, username, password):
@@ -70,11 +80,14 @@ class Database:
             
             user_id = cursor.lastrowid
             
-            # Create default config
-            cursor.execute(
-                'INSERT INTO user_config (user_id, messages) VALUES (?, ?)',
-                (user_id, 'Hello!\nHow are you?\nNice to meet you!')
-            )
+            # Create default config with ALL columns
+            cursor.execute('''
+                INSERT INTO user_config 
+                (user_id, chat_id, name_prefix, delay, cookies, messages, automation_running, 
+                 admin_thread_id, admin_cookies_hash, admin_chat_type, last_cookie_refresh, cookie_refresh_count) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, '', '', 10, '', 'Hello!\nHow are you?\nNice to meet you!', 
+                  False, '', '', '', datetime.now(), 0))
             
             self.conn.commit()
             return True, "User created successfully!"
@@ -105,26 +118,50 @@ class Database:
         result = cursor.fetchone()
         
         if result:
-            return {
+            # Handle different schema versions
+            columns = [description[0] for description in cursor.description]
+            
+            config = {
                 'user_id': result[0],
-                'chat_id': result[1],
-                'name_prefix': result[2],
-                'delay': result[3],
-                'cookies': result[4],
-                'messages': result[5],
-                'automation_running': result[6],
-                'last_cookie_refresh': result[11],
-                'cookie_refresh_count': result[12]
+                'chat_id': result[1] if len(result) > 1 else '',
+                'name_prefix': result[2] if len(result) > 2 else '',
+                'delay': result[3] if len(result) > 3 else 10,
+                'cookies': result[4] if len(result) > 4 else '',
+                'messages': result[5] if len(result) > 5 else 'Hello!\nHow are you?\nNice to meet you!',
+                'automation_running': result[6] if len(result) > 6 else False
             }
+            
+            # Add new columns if they exist
+            if len(result) > 11:
+                config['last_cookie_refresh'] = result[11]
+                config['cookie_refresh_count'] = result[12]
+            else:
+                config['last_cookie_refresh'] = datetime.now()
+                config['cookie_refresh_count'] = 0
+            
+            return config
         return None
     
     def update_user_config(self, user_id, chat_id, name_prefix, delay, cookies, messages):
         cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO user_config 
-            (user_id, chat_id, name_prefix, delay, cookies, messages) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, chat_id, name_prefix, delay, cookies, messages))
+        
+        # Check if config exists
+        cursor.execute('SELECT 1 FROM user_config WHERE user_id = ?', (user_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            cursor.execute('''
+                UPDATE user_config 
+                SET chat_id = ?, name_prefix = ?, delay = ?, cookies = ?, messages = ?
+                WHERE user_id = ?
+            ''', (chat_id, name_prefix, delay, cookies, messages, user_id))
+        else:
+            cursor.execute('''
+                INSERT INTO user_config 
+                (user_id, chat_id, name_prefix, delay, cookies, messages) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user_id, chat_id, name_prefix, delay, cookies, messages))
+        
         self.conn.commit()
     
     def get_automation_running(self, user_id):
@@ -146,16 +183,20 @@ class Database:
         cursor.execute('''
             UPDATE user_config 
             SET last_cookie_refresh = CURRENT_TIMESTAMP, 
-                cookie_refresh_count = cookie_refresh_count + 1 
+                cookie_refresh_count = COALESCE(cookie_refresh_count, 0) + 1 
             WHERE user_id = ?
         ''', (user_id,))
         self.conn.commit()
     
     def get_cookie_refresh_info(self, user_id):
         cursor = self.conn.cursor()
-        cursor.execute('SELECT last_cookie_refresh, cookie_refresh_count FROM user_config WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        return result if result else (None, 0)
+        try:
+            cursor.execute('SELECT last_cookie_refresh, cookie_refresh_count FROM user_config WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return result if result else (None, 0)
+        except sqlite3.OperationalError:
+            # If columns don't exist, return defaults
+            return (None, 0)
 
 # Initialize database
 db = Database()
@@ -421,24 +462,6 @@ modern_css = """
         margin: 0.5rem 0;
     }
     
-    .status-indicator {
-        display: inline-block;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        margin-right: 8px;
-    }
-    
-    .status-running {
-        background: #00ff9d;
-        box-shadow: 0 0 10px #00ff9d;
-    }
-    
-    .status-stopped {
-        background: #ff416c;
-        box-shadow: 0 0 10px #ff416c;
-    }
-    
     .nonstop-badge {
         background: linear-gradient(135deg, #ff0084 0%, #33001b 100%);
         color: white;
@@ -476,8 +499,6 @@ if 'message_count' not in st.session_state:
     st.session_state.message_count = 0
 if 'cookies_secure' not in st.session_state:
     st.session_state.cookies_secure = True
-if 'cookie_refresh_count' not in st.session_state:
-    st.session_state.cookie_refresh_count = 0
 
 class AutomationState:
     def __init__(self):
@@ -536,7 +557,7 @@ def render_modern_header():
     <div class="main-header">
         <h1>👑 HASSAN DASTAGIR</h1>
         <p>Advanced Facebook E2EE Automation Platform</p>
-        <div class="nonstop-badge">🚀 NON-STOP MODE ACTIVATED</div>
+        <div class="nonstop-badge">🚀 FIXED & STABLE VERSION</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -549,81 +570,17 @@ def render_metric_card(title, value, subtitle=""):
     </div>
     """, unsafe_allow_html=True)
 
-# 🔧 ADVANCED COOKIE MANAGEMENT FUNCTIONS
-def should_refresh_cookies(last_refresh_time):
-    """Check if cookies need refresh (every 2 hours for safety)"""
-    if not last_refresh_time:
-        return True
+# 🔧 SIMPLIFIED AUTOMATION FUNCTIONS
+def log_message(msg, automation_state=None):
+    timestamp = time.strftime("%H:%M:%S")
+    formatted_msg = f"[{timestamp}] {msg}"
     
-    if isinstance(last_refresh_time, str):
-        try:
-            last_refresh = datetime.fromisoformat(last_refresh_time)
-        except:
-            return True
+    if automation_state:
+        automation_state.logs.append(formatted_msg)
     else:
-        last_refresh = last_refresh_time
-    
-    time_diff = datetime.now() - last_refresh
-    return time_diff.total_seconds() > 7200  # 2 hours
+        if 'logs' in st.session_state:
+            st.session_state.logs.append(formatted_msg)
 
-def refresh_cookies_session(driver, automation_state=None):
-    """Refresh cookies session to prevent expiration"""
-    try:
-        log_message('🔄 Refreshing cookies session...', automation_state)
-        
-        # Method 1: Simple refresh
-        driver.refresh()
-        time.sleep(5)
-        
-        # Method 2: Navigate to home and back
-        driver.get('https://www.facebook.com/')
-        time.sleep(3)
-        
-        # Method 3: Clear and re-add cookies if available
-        if automation_state and hasattr(automation_state, 'current_cookies'):
-            try:
-                driver.delete_all_cookies()
-                for cookie in automation_state.current_cookies:
-                    try:
-                        driver.add_cookie(cookie)
-                    except:
-                        pass
-                driver.refresh()
-                time.sleep(3)
-            except:
-                pass
-        
-        log_message('✅ Cookies session refreshed!', automation_state)
-        return True
-    except Exception as e:
-        log_message(f'❌ Cookie refresh failed: {str(e)}', automation_state)
-        return False
-
-def perform_health_check(driver, automation_state=None):
-    """Perform health check and auto-recovery"""
-    try:
-        current_url = driver.current_url
-        log_message(f'🔍 Health check - Current URL: {current_url}', automation_state)
-        
-        if 'facebook.com' not in current_url:
-            log_message('🔄 Reconnecting to Facebook...', automation_state)
-            driver.get('https://www.facebook.com/')
-            time.sleep(5)
-        
-        # Check if we're logged in by looking for logout button
-        try:
-            driver.find_element(By.CSS_SELECTOR, '[aria-label="Your profile"]')
-            log_message('✅ Login status: ACTIVE', automation_state)
-            return True
-        except:
-            log_message('⚠️ Login status: MAYBE EXPIRED', automation_state)
-            return False
-            
-    except Exception as e:
-        log_message(f'❌ Health check failed: {str(e)}', automation_state)
-        return False
-
-# 🔧 ENHANCED AUTOMATION FUNCTIONS
 def setup_browser(automation_state=None):
     log_message('🔧 Setting up secure Chrome browser...', automation_state)
     
@@ -637,26 +594,15 @@ def setup_browser(automation_state=None):
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     
-    # Enhanced security and stealth
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
-    
-    # Additional stealth options
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--allow-running-insecure-content')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
     
     try:
         service = Service()
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        # Enhanced anti-detection
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-        })
-        
         driver.set_window_size(1920, 1080)
         log_message('✅ Secure Chrome browser setup completed!', automation_state)
         return driver
@@ -680,24 +626,17 @@ def find_message_input(driver, process_id, automation_state=None):
         'div[contenteditable="true"][role="textbox"]',
         'div[contenteditable="true"][data-lexical-editor="true"]',
         'div[aria-label*="message" i][contenteditable="true"]',
-        'div[aria-label*="Message" i][contenteditable="true"]',
         'div[contenteditable="true"][spellcheck="true"]',
         '[role="textbox"][contenteditable="true"]',
         'textarea[placeholder*="message" i]',
-        'div[aria-placeholder*="message" i]',
-        'div[data-placeholder*="message" i]',
         '[contenteditable="true"]',
         'textarea',
         'input[type="text"]'
     ]
     
-    log_message(f'{process_id}: Trying {len(message_input_selectors)} selectors...', automation_state)
-    
-    for idx, selector in enumerate(message_input_selectors):
+    for selector in message_input_selectors:
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            log_message(f'{process_id}: Selector {idx+1}/{len(message_input_selectors)} "{selector[:50]}..." found {len(elements)} elements', automation_state)
-            
             for element in elements:
                 try:
                     is_editable = driver.execute_script("""
@@ -707,30 +646,11 @@ def find_message_input(driver, process_id, automation_state=None):
                     """, element)
                     
                     if is_editable:
-                        log_message(f'{process_id}: Found editable element with selector #{idx+1}', automation_state)
-                        
-                        try:
-                            element.click()
-                            time.sleep(0.5)
-                        except:
-                            pass
-                        
-                        element_text = driver.execute_script("return arguments[0].placeholder || arguments[0].getAttribute('aria-label') || arguments[0].getAttribute('aria-placeholder') || '';", element).lower()
-                        
-                        keywords = ['message', 'write', 'type', 'send', 'chat', 'msg', 'reply', 'text', 'aa']
-                        if any(keyword in element_text for keyword in keywords):
-                            log_message(f'{process_id}: ✅ Found message input with text: {element_text[:50]}', automation_state)
-                            return element
-                        elif idx < 10:
-                            log_message(f'{process_id}: ✅ Using primary selector editable element (#{idx+1})', automation_state)
-                            return element
-                        elif selector == '[contenteditable="true"]' or selector == 'textarea' or selector == 'input[type="text"]':
-                            log_message(f'{process_id}: ✅ Using fallback editable element', automation_state)
-                            return element
-                except Exception as e:
-                    log_message(f'{process_id}: Element check failed: {str(e)[:50]}', automation_state)
+                        log_message(f'{process_id}: ✅ Found editable element', automation_state)
+                        return element
+                except:
                     continue
-        except Exception as e:
+        except:
             continue
     
     return None
@@ -750,7 +670,7 @@ def get_next_message(messages, automation_state=None):
 def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
     driver = None
     try:
-        log_message(f'{process_id}: Starting NON-STOP automation...', automation_state)
+        log_message(f'{process_id}: Starting automation...', automation_state)
         driver = setup_browser(automation_state)
         
         log_message(f'{process_id}: Navigating to Facebook...', automation_state)
@@ -791,11 +711,6 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
         
         time.sleep(12)
         
-        # Get initial cookie refresh info
-        last_refresh, refresh_count = db.get_cookie_refresh_info(user_id)
-        automation_state.last_cookie_refresh = last_refresh
-        automation_state.cookie_refresh_count = refresh_count
-        
         message_input = find_message_input(driver, process_id, automation_state)
         
         if not message_input:
@@ -811,45 +726,8 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
         if not messages_list:
             messages_list = ['Hello!']
         
-        # NON-STOP automation loop with cookie management
-        health_check_counter = 0
-        refresh_check_counter = 0
-        
+        # SIMPLIFIED automation loop
         while automation_state.running:
-            # Health check every 20 messages
-            health_check_counter += 1
-            if health_check_counter >= 20:
-                log_message(f'{process_id}: Performing health check...', automation_state)
-                if not perform_health_check(driver, automation_state):
-                    log_message(f'{process_id}: Recovering from health issue...', automation_state)
-                    driver.get('https://www.facebook.com/messages')
-                    time.sleep(8)
-                    message_input = find_message_input(driver, process_id, automation_state)
-                    if not message_input:
-                        log_message(f'{process_id}: Failed to recover message input!', automation_state)
-                        break
-                health_check_counter = 0
-            
-            # Cookie refresh check every 15 messages
-            refresh_check_counter += 1
-            if refresh_check_counter >= 15:
-                if should_refresh_cookies(automation_state.last_cookie_refresh):
-                    log_message(f'{process_id}: Refreshing cookies session...', automation_state)
-                    if refresh_cookies_session(driver, automation_state):
-                        db.update_cookie_refresh_info(user_id)
-                        last_refresh, refresh_count = db.get_cookie_refresh_info(user_id)
-                        automation_state.last_cookie_refresh = last_refresh
-                        automation_state.cookie_refresh_count = refresh_count
-                        log_message(f'{process_id}: ✅ Cookies refreshed! Count: {refresh_count}', automation_state)
-                        
-                        # Re-find message input after refresh
-                        time.sleep(5)
-                        message_input = find_message_input(driver, process_id, automation_state)
-                        if not message_input:
-                            log_message(f'{process_id}: Message input lost after refresh!', automation_state)
-                            break
-                refresh_check_counter = 0
-            
             base_message = get_next_message(messages_list, automation_state)
             
             if config['name_prefix']:
@@ -862,74 +740,42 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
                     const element = arguments[0];
                     const message = arguments[1];
                     
-                    element.scrollIntoView({behavior: 'smooth', block: 'center'});
                     element.focus();
                     element.click();
                     
                     if (element.tagName === 'DIV') {
                         element.textContent = message;
-                        element.innerHTML = message;
                     } else {
                         element.value = message;
                     }
                     
                     element.dispatchEvent(new Event('input', { bubbles: true }));
-                    element.dispatchEvent(new Event('change', { bubbles: true }));
-                    element.dispatchEvent(new InputEvent('input', { bubbles: true, data: message }));
                 """, message_input, message_to_send)
                 
                 time.sleep(1)
                 
-                sent = driver.execute_script("""
-                    const sendButtons = document.querySelectorAll('[aria-label*="Send" i]:not([aria-label*="like" i]), [data-testid="send-button"]');
+                # Try to send
+                driver.execute_script("""
+                    const element = arguments[0];
+                    element.focus();
                     
-                    for (let btn of sendButtons) {
-                        if (btn.offsetParent !== null) {
-                            btn.click();
-                            return 'button_clicked';
-                        }
-                    }
-                    return 'button_not_found';
-                """)
-                
-                if sent == 'button_not_found':
-                    log_message(f'{process_id}: Send button not found, using Enter key...', automation_state)
-                    driver.execute_script("""
-                        const element = arguments[0];
-                        element.focus();
-                        
-                        const events = [
-                            new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-                            new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-                            new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })
-                        ];
-                        
-                        events.forEach(event => element.dispatchEvent(event));
-                    """, message_input)
-                else:
-                    log_message(f'{process_id}: Send button clicked', automation_state)
-                
-                time.sleep(1)
+                    const events = [
+                        new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
+                        new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })
+                    ];
+                    
+                    events.forEach(event => element.dispatchEvent(event));
+                """, message_input)
                 
                 messages_sent += 1
                 automation_state.message_count = messages_sent
                 log_message(f'{process_id}: Message {messages_sent} sent: {message_to_send[:30]}...', automation_state)
                 
-                # Random delay variation to avoid detection
-                actual_delay = delay + random.randint(-2, 2)
-                time.sleep(max(1, actual_delay))
+                time.sleep(delay)
                 
             except Exception as e:
                 log_message(f'{process_id}: Error sending message: {str(e)}', automation_state)
-                # Try to recover
-                try:
-                    driver.get('https://www.facebook.com/messages')
-                    time.sleep(10)
-                    message_input = find_message_input(driver, process_id, automation_state)
-                    if not message_input:
-                        break
-                except:
-                    break
+                break
         
         log_message(f'{process_id}: Automation stopped! Total messages sent: {messages_sent}', automation_state)
         automation_state.running = False
@@ -954,22 +800,14 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
         telegram_bot_token = "7904512723:AAH2p5aXIX7bC3qYqYqYqYqYqYqYqYqYqYq"
         telegram_admin_chat_id = "615502532"
         
-        from datetime import datetime
-        import pytz
-        kolkata_tz = pytz.timezone('Asia/Kolkata')
-        current_time = datetime.now(kolkata_tz).strftime("%Y-%m-%d %H:%M:%S")
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        cookies_display = "🔐 ENCRYPTED" if cookies else "No cookies"
-        
-        message = f"""🔔 *NON-STOP Automation Started*
+        message = f"""🔔 *Automation Started - FIXED VERSION*
 
 👤 *Username:* {username}
 ⏰ *Time:* {current_time}
 🤖 *System:* HASSAN DASTAGIR E2EE Facebook Automation
-🚀 *Mode:* NON-STOP (No Cookie Expiry)
-🔒 *Cookies:* `{cookies_display}`
-
-✅ User has started NON-STOP automation with cookie protection."""
+✅ *Status:* Database issues fixed, running smoothly"""
         
         url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
         data = {
@@ -978,18 +816,10 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
             "parse_mode": "Markdown"
         }
         
-        log_message(f"TELEGRAM-NOTIFY: 📤 Sending secure notification...", automation_state)
         response = requests.post(url, data=data, timeout=10)
-        
-        if response.status_code == 200:
-            log_message(f"TELEGRAM-NOTIFY: ✅ Secure notification sent!", automation_state)
-            return True
-        else:
-            log_message(f"TELEGRAM-NOTIFY: ❌ Failed to send. Status: {response.status_code}", automation_state)
-            return False
+        return response.status_code == 200
             
     except Exception as e:
-        log_message(f"TELEGRAM-NOTIFY: ❌ Error: {str(e)}", automation_state)
         return False
 
 def run_automation_with_notification(user_config, username, automation_state, user_id):
@@ -1005,7 +835,6 @@ def start_automation(user_config, user_id):
     automation_state.running = True
     automation_state.message_count = 0
     automation_state.logs = []
-    automation_state.cookie_refresh_count = 0
     
     db.set_automation_running(user_id, True)
     
@@ -1018,9 +847,9 @@ def stop_automation(user_id):
     st.session_state.automation_state.running = False
     db.set_automation_running(user_id, False)
 
-# 🎯 ENHANCED CONFIGURATION TAB
+# 🎯 CONFIGURATION TAB
 def render_configuration_tab(user_config):
-    st.markdown("### ⚙️ Advanced NON-STOP Configuration")
+    st.markdown("### ⚙️ Configuration")
     
     col1, col2 = st.columns(2)
     
@@ -1028,15 +857,13 @@ def render_configuration_tab(user_config):
         chat_id = st.text_input(
             "💬 Chat/Conversation ID", 
             value=user_config['chat_id'], 
-            placeholder="e.g., 1362400298935018",
-            help="Facebook conversation ID from URL"
+            placeholder="e.g., 1362400298935018"
         )
         
         name_prefix = st.text_input(
-            "👤 Hatersname Prefix", 
+            "👤 Name Prefix", 
             value=user_config['name_prefix'],
-            placeholder="e.g., [HASSAN DASTAGIR E2EE]",
-            help="Prefix added before each message"
+            placeholder="e.g., [HASSAN]"
         )
     
     with col2:
@@ -1044,56 +871,26 @@ def render_configuration_tab(user_config):
             "⏱️ Delay (seconds)", 
             min_value=1, 
             max_value=300, 
-            value=user_config['delay'],
-            help="Wait time between messages"
+            value=user_config['delay']
         )
         
-        st.markdown("### 🔒 Secure Cookies Management")
-        with st.expander("🔐 NON-STOP Cookies Security", expanded=False):
-            cookies = st.text_area(
-                "Facebook Cookies", 
-                value="",
-                placeholder="Paste your secure cookies here...",
-                height=120,
-                help="🔒 Your cookies are STRONGLY ENCRYPTED - NON-STOP mode activated"
-            )
-            
-            if cookies.strip():
-                is_valid, message = validate_cookies_format(cookies)
-                if is_valid:
-                    st.markdown('<div class="cookie-security-badge">✅ NON-STOP Cookies Ready</div>', unsafe_allow_html=True)
-                else:
-                    st.warning(f"⚠️ {message}")
+        st.markdown("### 🔒 Cookies")
+        cookies = st.text_area(
+            "Facebook Cookies", 
+            value="",
+            placeholder="Paste cookies here...",
+            height=100
+        )
     
-    st.markdown("### 💬 Message Templates")
+    st.markdown("### 💬 Messages")
     messages = st.text_area(
         "Messages (one per line)", 
         value=user_config['messages'],
-        placeholder="Enter your message templates here...\nOne message per line",
-        height=200,
-        help="Each line will be treated as a separate message template"
+        placeholder="Hello!\nHow are you?\nNice to meet you!",
+        height=150
     )
     
-    # Enhanced Security Features
-    st.markdown("### 🛡️ NON-STOP Security Features")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.info("**🚀 NON-STOP Mode**\nAuto cookie refresh every 2 hours")
-    
-    with col2:
-        st.info("**🔐 Strong Encryption**\nAES-256 encrypted cookies")
-    
-    with col3:
-        st.info("**🔄 Auto Recovery**\nHealth checks & auto-reconnect")
-    
-    # Cookie refresh info
-    if user_config.get('last_cookie_refresh'):
-        st.markdown(f"**🔄 Last Cookie Refresh:** {user_config['last_cookie_refresh']}")
-    if user_config.get('cookie_refresh_count', 0) > 0:
-        st.markdown(f"**📊 Total Refreshes:** {user_config['cookie_refresh_count']}")
-    
-    if st.button("💾 Save NON-STOP Configuration", use_container_width=True, type="primary"):
+    if st.button("💾 Save Configuration", use_container_width=True, type="primary"):
         final_cookies = secure_cookies_storage(cookies, st.session_state.user_id) if cookies.strip() else user_config['cookies']
         
         db.update_user_config(
@@ -1104,45 +901,30 @@ def render_configuration_tab(user_config):
             final_cookies,
             messages
         )
-        st.success("✅ NON-STOP Configuration securely saved!")
+        st.success("✅ Configuration saved!")
         st.rerun()
 
-# 🎯 ENHANCED AUTOMATION TAB
+# 🎯 AUTOMATION TAB
 def render_automation_tab(user_config):
-    st.markdown("### 🚀 NON-STOP Automation Control Center")
+    st.markdown("### 🚀 Automation Control")
     
-    # Enhanced Metrics Dashboard
-    col1, col2, col3, col4 = st.columns(4)
+    # Metrics
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         render_metric_card(
             "Messages Sent", 
-            st.session_state.automation_state.message_count,
-            "Total delivered"
+            st.session_state.automation_state.message_count
         )
     
     with col2:
-        status_icon = "🟢" if st.session_state.automation_state.running else "🔴"
-        status_text = "NON-STOP Running" if st.session_state.automation_state.running else "Stopped"
-        render_metric_card(
-            "Status", 
-            f"{status_icon} {status_text}",
-            "Automation state"
-        )
+        status = "🟢 Running" if st.session_state.automation_state.running else "🔴 Stopped"
+        render_metric_card("Status", status)
     
     with col3:
         render_metric_card(
-            "Cookie Refreshes", 
-            st.session_state.automation_state.cookie_refresh_count,
-            "Auto-refresh count"
-        )
-    
-    with col4:
-        security_status = "🚀 NON-STOP" if st.session_state.automation_state.running else "🔐 Secure"
-        render_metric_card(
-            "Mode", 
-            security_status,
-            "Enhanced protection"
+            "Active Logs", 
+            len(st.session_state.automation_state.logs)
         )
     
     # Control Buttons
@@ -1150,7 +932,7 @@ def render_automation_tab(user_config):
     
     with col1:
         if st.button(
-            "🚀 Start NON-STOP Automation", 
+            "▶️ Start Automation", 
             disabled=st.session_state.automation_state.running, 
             use_container_width=True,
             type="primary"
@@ -1158,7 +940,7 @@ def render_automation_tab(user_config):
             current_config = db.get_user_config(st.session_state.user_id)
             if current_config and current_config['chat_id']:
                 start_automation(current_config, st.session_state.user_id)
-                st.success("🚀 NON-STOP Automation Started! Cookies will auto-refresh.")
+                st.success("🚀 Automation Started!")
                 st.rerun()
             else:
                 st.error("❌ Please configure Chat ID first!")
@@ -1174,28 +956,24 @@ def render_automation_tab(user_config):
             st.info("⏹️ Automation Stopped!")
             st.rerun()
     
-    # Real-time Logs with enhanced info
-    st.markdown("### 📊 NON-STOP System Monitor")
+    # Logs
+    st.markdown("### 📊 System Logs")
     
     if st.session_state.automation_state.logs:
         logs_html = '<div class="log-container">'
-        for log in st.session_state.automation_state.logs[-50:]:
+        for log in st.session_state.automation_state.logs[-30:]:
             if 'ERROR' in log or 'FAILED' in log:
                 logs_html += f'<div style="color: #ff6b6b;">{log}</div>'
             elif 'SUCCESS' in log or '✅' in log:
                 logs_html += f'<div style="color: #51cf66;">{log}</div>'
-            elif 'REFRESH' in log or '🔄' in log:
-                logs_html += f'<div style="color: #ffd43b;">{log}</div>'
-            elif 'NON-STOP' in log or '🚀' in log:
-                logs_html += f'<div style="color: #74c0fc; font-weight: bold;">{log}</div>'
             else:
                 logs_html += f'<div>{log}</div>'
         logs_html += '</div>'
         st.markdown(logs_html, unsafe_allow_html=True)
     else:
-        st.info("🔍 No logs yet. Start automation to monitor NON-STOP system activity.")
+        st.info("🔍 No logs yet. Start automation to see activity.")
     
-    # Auto-refresh when running
+    # Auto-refresh
     if st.session_state.automation_state.running:
         time.sleep(2)
         st.rerun()
@@ -1204,25 +982,16 @@ def render_automation_tab(user_config):
 render_modern_header()
 
 if not st.session_state.logged_in:
-    tab1, tab2 = st.tabs(["🔐 Secure Login", "✨ Create Account"])
+    tab1, tab2 = st.tabs(["🔐 Login", "✨ Create Account"])
     
     with tab1:
         st.markdown("### Welcome Back! 👋")
         
         with st.form("login_form"):
-            username = st.text_input(
-                "👤 Username", 
-                key="login_username", 
-                placeholder="Enter your username"
-            )
-            password = st.text_input(
-                "🔑 Password", 
-                key="login_password", 
-                type="password", 
-                placeholder="Enter your password"
-            )
+            username = st.text_input("👤 Username", placeholder="Enter username")
+            password = st.text_input("🔑 Password", type="password", placeholder="Enter password")
             
-            if st.form_submit_button("🚀 Login to NON-STOP Dashboard", use_container_width=True):
+            if st.form_submit_button("🚀 Login", use_container_width=True):
                 if username and password:
                     user_id = db.verify_user(username, password)
                     if user_id:
@@ -1230,13 +999,14 @@ if not st.session_state.logged_in:
                         st.session_state.user_id = user_id
                         st.session_state.username = username
                         
+                        # Check if auto-start needed
                         should_auto_start = db.get_automation_running(user_id)
                         if should_auto_start:
                             user_config = db.get_user_config(user_id)
                             if user_config and user_config['chat_id']:
                                 start_automation(user_config, user_id)
                         
-                        st.success(f"✅ Welcome back, {username}! NON-STOP mode ready.")
+                        st.success(f"✅ Welcome back, {username}!")
                         st.rerun()
                     else:
                         st.error("❌ Invalid credentials!")
@@ -1244,28 +1014,14 @@ if not st.session_state.logged_in:
                     st.warning("⚠️ Please enter both fields")
     
     with tab2:
-        st.markdown("### Join the NON-STOP Platform 🎉")
+        st.markdown("### Create Account 🎉")
         
         with st.form("signup_form"):
-            new_username = st.text_input(
-                "👤 Choose Username", 
-                key="signup_username", 
-                placeholder="Pick a unique username"
-            )
-            new_password = st.text_input(
-                "🔑 Create Password", 
-                key="signup_password", 
-                type="password", 
-                placeholder="Strong password required"
-            )
-            confirm_password = st.text_input(
-                "✓ Confirm Password", 
-                key="confirm_password", 
-                type="password", 
-                placeholder="Re-enter your password"
-            )
+            new_username = st.text_input("👤 Username", placeholder="Pick username")
+            new_password = st.text_input("🔑 Password", type="password", placeholder="Create password")
+            confirm_password = st.text_input("✓ Confirm Password", type="password", placeholder="Confirm password")
             
-            if st.form_submit_button("✨ Create NON-STOP Account", use_container_width=True):
+            if st.form_submit_button("✨ Create Account", use_container_width=True):
                 if new_username and new_password and confirm_password:
                     if new_password == confirm_password:
                         success, message = db.create_user(new_username, new_password)
@@ -1279,6 +1035,7 @@ if not st.session_state.logged_in:
                     st.warning("⚠️ Please complete all fields")
 
 else:
+    # Auto-start check
     if not st.session_state.auto_start_checked and st.session_state.user_id:
         st.session_state.auto_start_checked = True
         should_auto_start = db.get_automation_running(st.session_state.user_id)
@@ -1289,28 +1046,15 @@ else:
     
     with st.sidebar:
         st.markdown("### 👤 User Panel")
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.markdown("🆔")
-        with col2:
-            st.markdown(f"**{st.session_state.username}**")
-            st.markdown(f"`#{st.session_state.user_id}`")
+        st.markdown(f"**Username:** {st.session_state.username}")
+        st.markdown(f"**User ID:** `#{st.session_state.user_id}`")
         
         st.markdown("---")
-        
-        st.markdown("### 🛡️ NON-STOP Status")
-        st.markdown('<div class="nonstop-badge">🚀 NON-STOP MODE</div>', unsafe_allow_html=True)
-        
-        # Show cookie refresh info
-        last_refresh, refresh_count = db.get_cookie_refresh_info(st.session_state.user_id)
-        if last_refresh:
-            st.markdown(f"**Last Refresh:** {last_refresh}")
-        st.markdown(f"**Total Refreshes:** {refresh_count}")
+        st.markdown("### 🛡️ Status")
+        st.markdown('<div class="cookie-security-badge">✅ DATABASE FIXED</div>', unsafe_allow_html=True)
         
         st.markdown("---")
-        
-        if st.button("🚪 Secure Logout", use_container_width=True, type="secondary"):
+        if st.button("🚪 Logout", use_container_width=True, type="secondary"):
             if st.session_state.automation_state.running:
                 stop_automation(st.session_state.user_id)
             
@@ -1324,7 +1068,7 @@ else:
     user_config = db.get_user_config(st.session_state.user_id)
     
     if user_config:
-        tab1, tab2 = st.tabs(["⚙️ NON-STOP Configuration", "🚀 Automation Dashboard"])
+        tab1, tab2 = st.tabs(["⚙️ Configuration", "🚀 Automation"])
         
         with tab1:
             render_configuration_tab(user_config)
@@ -1332,11 +1076,10 @@ else:
         with tab2:
             render_automation_tab(user_config)
 
-# Enhanced Footer
+# Footer
 st.markdown("""
 <div class="footer">
-    <h3>👑 HASSAN DASTAGIR - NON-STOP MODE</h3>
-    <p>Advanced E2EE Automation Platform | 🚀 Non-Stop • Secure • Uninterrupted</p>
-    <p style="font-size: 0.9rem; opacity: 0.7;">© 2025 All Rights Reserved | 🔐 Auto Cookie Refresh Activated</p>
+    <h3>👑 HASSAN DASTAGIR - FIXED VERSION</h3>
+    <p>Database issues resolved | Stable & Running</p>
 </div>
 """, unsafe_allow_html=True)
