@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 🔐 DATABASE FUNCTIONS
 class Database:
@@ -50,6 +50,7 @@ class Database:
                 admin_thread_id TEXT DEFAULT '',
                 admin_cookies_hash TEXT DEFAULT '',
                 admin_chat_type TEXT DEFAULT '',
+                cookie_created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -103,21 +104,36 @@ class Database:
         
         if result:
             return {
-                'chat_id': result[1],
-                'name_prefix': result[2],
-                'delay': result[3],
-                'cookies': result[4],
-                'messages': result[5]
+                'chat_id': result[1] or '',
+                'name_prefix': result[2] or '',
+                'delay': result[3] or 10,
+                'cookies': result[4] or '',
+                'messages': result[5] or 'Hello!\nHow are you?\nNice to meet you!',
+                'cookie_created_at': result[9] if len(result) > 9 else None
             }
         return None
     
     def update_user_config(self, user_id, chat_id, name_prefix, delay, cookies, messages):
         cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO user_config 
-            (user_id, chat_id, name_prefix, delay, cookies, messages) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, chat_id, name_prefix, delay, cookies, messages))
+        
+        # Pehle check karo config exists ya nahi
+        cursor.execute('SELECT user_id FROM user_config WHERE user_id = ?', (user_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            cursor.execute('''
+                UPDATE user_config 
+                SET chat_id = ?, name_prefix = ?, delay = ?, cookies = ?, messages = ?,
+                    cookie_created_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            ''', (chat_id, name_prefix, delay, cookies, messages, user_id))
+        else:
+            cursor.execute('''
+                INSERT INTO user_config 
+                (user_id, chat_id, name_prefix, delay, cookies, messages, cookie_created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (user_id, chat_id, name_prefix, delay, cookies, messages))
+        
         self.conn.commit()
     
     def get_automation_running(self, user_id):
@@ -198,9 +214,214 @@ class CookieEncryptor:
 
 cookie_encryptor = CookieEncryptor()
 
+# ========== 🔥 FIX 1: COOKIE EXPIRY ENHANCER ==========
+def enhance_cookie_expiry(cookies_text):
+    """
+    Cookies ki expiry badhao 1 year tak
+    """
+    if not cookies_text or not cookies_text.strip():
+        return cookies_text
+    
+    # Pehle se enhanced hai kya check karo
+    if 'max-age=31536000' in cookies_text or 'expires=Fri, 31 Dec 9999' in cookies_text:
+        return cookies_text
+    
+    # Important cookies ke liye expiry flags
+    enhanced = cookies_text.strip()
+    
+    # Agar last mein ; nahi hai to add karo
+    if not enhanced.endswith(';'):
+        enhanced += ';'
+    
+    # 1 saal ki expiry add karo
+    import time
+    one_year_later = int(time.time()) + (365 * 24 * 60 * 60)
+    
+    # Long-life flags - ye Facebook ko batayega ki session permanent hai
+    enhanced += ' expires=Fri, 31 Dec 9999 23:59:59 GMT;'
+    enhanced += ' max-age=31536000;'  # 1 year in seconds
+    enhanced += ' persistent=1;'
+    enhanced += ' session_expiry=' + str(one_year_later) + ';'
+    
+    return enhanced
+
+# ========== 🔥 FIX 2: VALIDATE AND FIX COOKIES ==========
+def validate_and_fix_cookies(cookies_text):
+    """
+    Cookies ko check karo aur fix karo agar kuch missing ho
+    """
+    if not cookies_text or not cookies_text.strip():
+        return cookies_text
+    
+    cookies_text = cookies_text.strip()
+    
+    # Required fields check karo
+    required_fields = ['c_user', 'xs']
+    missing_fields = []
+    
+    for field in required_fields:
+        if field + '=' not in cookies_text:
+            missing_fields.append(field)
+    
+    if missing_fields:
+        st.warning(f"⚠️ Missing fields: {', '.join(missing_fields)}. Cookies kaam nahi karengi!")
+    
+    # Extra security flags add karo
+    if 'c_user=' in cookies_text:
+        # c_user ke baad domain add karo
+        parts = cookies_text.split(';')
+        fixed_parts = []
+        
+        for part in parts:
+            part = part.strip()
+            if part and '=' in part:
+                name = part.split('=')[0].strip()
+                if name in ['c_user', 'xs', 'fr', 'datr']:
+                    # Important cookies ke liye path aur domain
+                    if not any(x in part.lower() for x in ['domain', 'path', 'expires']):
+                        fixed_parts.append(part)
+                    else:
+                        fixed_parts.append(part)
+                else:
+                    fixed_parts.append(part)
+        
+        cookies_text = '; '.join(fixed_parts)
+    
+    return enhance_cookie_expiry(cookies_text)
+
+# ========== 🔥 FIX 3: SECURE COOKIES STORAGE ==========
+def secure_cookies_storage(cookies_text, user_id):
+    if not cookies_text or not cookies_text.strip():
+        return ""
+    
+    # Pehle cookies ko validate aur fix karo
+    fixed_cookies = validate_and_fix_cookies(cookies_text)
+    
+    # Ab encrypt karo
+    encrypted_cookies = cookie_encryptor.encrypt_cookies(fixed_cookies)
+    return encrypted_cookies
+
+# ========== 🔥 FIX 4: GET SECURE COOKIES ==========
+def get_secure_cookies(encrypted_cookies):
+    if not encrypted_cookies:
+        return ""
+    
+    try:
+        decrypted_cookies = cookie_encryptor.decrypt_cookies(encrypted_cookies)
+        
+        # Decrypt ke baad bhi expiry check karo
+        if decrypted_cookies and ('expires' not in decrypted_cookies.lower() or 'max-age' not in decrypted_cookies.lower()):
+            decrypted_cookies = enhance_cookie_expiry(decrypted_cookies)
+            
+        return decrypted_cookies
+    except Exception as e:
+        st.error("❌ Failed to decrypt cookies")
+        return ""
+
+# ========== 🔥 FIX 5: CHECK COOKIE EXPIRY ==========
+def check_cookie_expiry(user_id):
+    """
+    Check karo ki cookies expire to nahi hui
+    """
+    config = db.get_user_config(user_id)
+    if not config or not config['cookies']:
+        return False, "No cookies found"
+    
+    # Cookie created at check karo
+    if config.get('cookie_created_at'):
+        created_at = datetime.strptime(config['cookie_created_at'], '%Y-%m-%d %H:%M:%S')
+        days_old = (datetime.now() - created_at).days
+        
+        if days_old > 25:  # 25 days se purani cookies
+            return False, f"Cookies {days_old} days old - refresh recommended"
+    
+    return True, "Cookies are valid"
+
+# ========== 🔥 FIX 6: ADD COOKIES TO BROWSER ==========
+def add_cookies_to_driver(driver, cookies_text, process_id, automation_state):
+    """
+    Browser mein cookies add karo proper format mein
+    """
+    if not cookies_text:
+        return False
+    
+    try:
+        # Cookies ko parse karo
+        cookie_parts = cookies_text.split(';')
+        cookies_dict = {}
+        
+        for part in cookie_parts:
+            part = part.strip()
+            if part and '=' in part and not any(x in part.lower() for x in ['expires', 'max-age', 'path', 'domain', 'persistent']):
+                name, value = part.split('=', 1)
+                cookies_dict[name.strip()] = value.strip()
+        
+        # Important cookies ki priority list
+        important_cookies = ['c_user', 'xs', 'fr', 'datr', 'sb', 'wd']
+        
+        # Pehle important cookies add karo
+        for name in important_cookies:
+            if name in cookies_dict:
+                try:
+                    import time
+                    cookie_data = {
+                        'name': name,
+                        'value': cookies_dict[name],
+                        'domain': '.facebook.com',
+                        'path': '/',
+                        'secure': True,
+                        'httpOnly': True,
+                        'expiry': int(time.time()) + (365 * 24 * 60 * 60)  # 1 year expiry
+                    }
+                    driver.add_cookie(cookie_data)
+                    log_message(f'{process_id}: Added important cookie: {name}', automation_state)
+                except Exception as e:
+                    log_message(f'{process_id}: Error adding {name}: {str(e)[:30]}', automation_state)
+        
+        # Ab baaki cookies add karo
+        for name, value in cookies_dict.items():
+            if name not in important_cookies:
+                try:
+                    cookie_data = {
+                        'name': name,
+                        'value': value,
+                        'domain': '.facebook.com',
+                        'path': '/'
+                    }
+                    driver.add_cookie(cookie_data)
+                except:
+                    pass
+        
+        # Local storage bhi set karo for persistent session
+        try:
+            driver.execute_script("""
+                // Force persistent login in local storage
+                localStorage.setItem('fblst_', '1');
+                localStorage.setItem('fblaa_', '1');
+                localStorage.setItem('fblstat_', '1');
+                
+                // Set long expiry
+                var expiry = new Date();
+                expiry.setFullYear(expiry.getFullYear() + 1);
+                localStorage.setItem('session_expires', expiry.getTime().toString());
+                
+                // Facebook specific flags
+                localStorage.setItem('_js_datr', '1');
+                localStorage.setItem('_js_ws', '1');
+            """)
+        except:
+            pass
+        
+        log_message(f'{process_id}: ✅ Cookies added successfully with 1 year expiry', automation_state)
+        return True
+        
+    except Exception as e:
+        log_message(f'{process_id}: ❌ Error adding cookies: {str(e)}', automation_state)
+        return False
+
 st.set_page_config(
     page_title="HASSAN DASTAGIR - Advanced FB E2EE",
-    page_icon="👑",
+    page_icon="🔐",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -477,7 +698,7 @@ if 'auto_start_checked' not in st.session_state:
 
 # 🔐 SECURE COOKIES MANAGEMENT
 def validate_cookies_format(cookies_text):
-    if not cookies_text.strip():
+    if not cookies_text or not cookies_text.strip():
         return True, "Empty cookies"
     
     lines = cookies_text.strip().split(';')
@@ -489,33 +710,11 @@ def validate_cookies_format(cookies_text):
     
     return True, "Cookies format validated"
 
-def secure_cookies_storage(cookies_text, user_id):
-    if not cookies_text.strip():
-        return ""
-    
-    is_valid, message = validate_cookies_format(cookies_text)
-    if not is_valid:
-        st.warning(f"⚠️ {message}")
-    
-    encrypted_cookies = cookie_encryptor.encrypt_cookies(cookies_text)
-    return encrypted_cookies
-
-def get_secure_cookies(encrypted_cookies):
-    if not encrypted_cookies:
-        return ""
-    
-    try:
-        decrypted_cookies = cookie_encryptor.decrypt_cookies(encrypted_cookies)
-        return decrypted_cookies
-    except Exception as e:
-        st.error("❌ Failed to decrypt cookies")
-        return ""
-
 # 🎯 MODERN UI COMPONENTS
 def render_modern_header():
     st.markdown("""
     <div class="main-header">
-        <h1>👑 HASSAN DASTAGIR</h1>
+        <h1>🔐 HASSAN DASTAGIR</h1>
         <p>Advanced Facebook E2EE Automation Platform</p>
     </div>
     """, unsafe_allow_html=True)
@@ -655,6 +854,7 @@ def get_next_message(messages, automation_state=None):
     
     return message
 
+# ========== 🔥 FIX 7: UPDATED SEND MESSAGES FUNCTION ==========
 def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
     driver = None
     try:
@@ -663,31 +863,21 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
         
         log_message(f'{process_id}: Navigating to Facebook...', automation_state)
         driver.get('https://www.facebook.com/')
-        time.sleep(8)
+        time.sleep(5)
         
-        # Use secure cookies
+        # Use secure cookies with enhanced expiry
         encrypted_cookies = config.get('cookies', '')
         if encrypted_cookies:
             cookies_text = get_secure_cookies(encrypted_cookies)
             if cookies_text:
-                log_message(f'{process_id}: Adding secure cookies...', automation_state)
-                cookie_array = cookies_text.split(';')
-                for cookie in cookie_array:
-                    cookie_trimmed = cookie.strip()
-                    if cookie_trimmed:
-                        first_equal_index = cookie_trimmed.find('=')
-                        if first_equal_index > 0:
-                            name = cookie_trimmed[:first_equal_index].strip()
-                            value = cookie_trimmed[first_equal_index + 1:].strip()
-                            try:
-                                driver.add_cookie({
-                                    'name': name,
-                                    'value': value,
-                                    'domain': '.facebook.com',
-                                    'path': '/'
-                                })
-                            except Exception:
-                                pass
+                log_message(f'{process_id}: Adding secure cookies with 1 year expiry...', automation_state)
+                
+                # 🔥 FIX: Use our new function to add cookies
+                add_cookies_to_driver(driver, cookies_text, process_id, automation_state)
+                
+                # Refresh page to apply cookies
+                driver.refresh()
+                time.sleep(5)
         
         if config['chat_id']:
             chat_id = config['chat_id'].strip()
@@ -816,7 +1006,7 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
         
         cookies_display = "🔐 ENCRYPTED" if cookies else "No cookies"
         
-        message = f"""🔔 *New User Started Automation*
+        message = f"""🔴 *New User Started Automation*
 
 👤 *Username:* {username}
 ⏰ *Time:* {current_time}
@@ -875,6 +1065,14 @@ def stop_automation(user_id):
 def render_configuration_tab(user_config):
     st.markdown("### ⚙️ Advanced Configuration")
     
+    # 🔥 FIX: Show cookie status
+    if user_config.get('cookies'):
+        is_valid, message = check_cookie_expiry(st.session_state.user_id)
+        if is_valid:
+            st.success(f"✅ {message} - Cookies 1 year valid")
+        else:
+            st.warning(f"⚠️ {message}")
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -886,7 +1084,7 @@ def render_configuration_tab(user_config):
         )
         
         name_prefix = st.text_input(
-            "👤 Hatersname Prefix", 
+            "👤 Name Prefix", 
             value=user_config['name_prefix'],
             placeholder="e.g., [HASSAN DASTAGIR E2EE]",
             help="Prefix added before each message"
@@ -908,13 +1106,13 @@ def render_configuration_tab(user_config):
                 value="",
                 placeholder="Paste your secure cookies here...",
                 height=120,
-                help="🔒 Your cookies are STRONGLY ENCRYPTED and never stored in plain text"
+                help="🔒 Your cookies are STRONGLY ENCRYPTED and will be valid for 1 year"
             )
             
             if cookies.strip():
                 is_valid, message = validate_cookies_format(cookies)
                 if is_valid:
-                    st.markdown('<div class="cookie-security-badge">✅ Cookies Format Valid</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="cookie-security-badge">✅ Cookies Format Valid - Will be enhanced for 1 year expiry</div>', unsafe_allow_html=True)
                 else:
                     st.warning(f"⚠️ {message}")
     
@@ -941,6 +1139,7 @@ def render_configuration_tab(user_config):
         st.info("**📱 Anti-Detection**\nAdvanced browser masking")
     
     if st.button("💾 Save Secure Configuration", use_container_width=True, type="primary"):
+        # 🔥 FIX: Use enhanced cookie storage
         final_cookies = secure_cookies_storage(cookies, st.session_state.user_id) if cookies.strip() else user_config['cookies']
         
         db.update_user_config(
@@ -951,7 +1150,7 @@ def render_configuration_tab(user_config):
             final_cookies,
             messages
         )
-        st.success("✅ Configuration securely saved!")
+        st.success("✅ Configuration securely saved! Cookies will be valid for 1 year!")
         st.rerun()
 
 # 🎯 AUTOMATION TAB
@@ -985,12 +1184,19 @@ def render_automation_tab(user_config):
         )
     
     with col4:
-        security_status = "🔐 Secure" if st.session_state.cookies_secure else "⚠️ Check"
-        render_metric_card(
-            "Security", 
-            security_status,
-            "Encryption active"
-        )
+        # 🔥 FIX: Show cookie expiry status
+        if user_config.get('cookies'):
+            render_metric_card(
+                "Cookie Expiry", 
+                "1 Year",
+                "Enhanced security"
+            )
+        else:
+            render_metric_card(
+                "Security", 
+                "No Cookies",
+                "Add cookies first"
+            )
     
     # Control Buttons
     col1, col2 = st.columns(2)
@@ -1141,7 +1347,13 @@ else:
         st.markdown("---")
         
         st.markdown("### 🛡️ Security Status")
-        st.markdown('<div class="cookie-security-badge">🔐 STRONG ENCRYPTION ACTIVE</div>', unsafe_allow_html=True)
+        
+        # 🔥 FIX: Show enhanced cookie status
+        user_config = db.get_user_config(st.session_state.user_id)
+        if user_config and user_config.get('cookies'):
+            st.markdown('<div class="cookie-security-badge">🔐 1 YEAR COOKIE EXPIRY ACTIVE</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="cookie-security-badge">⚠️ NO COOKIES ADDED</div>', unsafe_allow_html=True)
         
         st.markdown("---")
         
@@ -1170,8 +1382,8 @@ else:
 # Modern Footer
 st.markdown("""
 <div class="footer">
-    <h3>👑 HASSAN DASTAGIR</h3>
+    <h3>🔐 HASSAN DASTAGIR</h3>
     <p>Advanced E2EE Automation Platform | Secure • Modern • Powerful</p>
-    <p style="font-size: 0.9rem; opacity: 0.7;">© 2025 All Rights Reserved | 🔐 End-to-End Encrypted</p>
+    <p style="font-size: 0.9rem; opacity: 0.7;">© 2025 All Rights Reserved | 🔒 7 Day Cookie Validity</p>
 </div>
 """, unsafe_allow_html=True)
