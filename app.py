@@ -24,7 +24,7 @@ import psutil
 import subprocess
 import sys
 
-# 🔐 DATABASE FUNCTIONS (Enhanced)
+# 🔐 DATABASE FUNCTIONS (FIXED)
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('hassan_dastagir.db', check_same_thread=False)
@@ -43,7 +43,7 @@ class Database:
             )
         ''')
         
-        # User config table (ENHANCED)
+        # User config table - FIXED: All columns defined properly
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_config (
                 user_id INTEGER PRIMARY KEY,
@@ -66,7 +66,7 @@ class Database:
             )
         ''')
         
-        # NEW: Session tracking table
+        # Session tracking table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS automation_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +81,36 @@ class Database:
         ''')
         
         self.conn.commit()
+        
+        # FIX: Check if table has all columns, if not add them
+        self.migrate_database()
+    
+    def migrate_database(self):
+        """Add missing columns to existing tables"""
+        try:
+            cursor = self.conn.cursor()
+            
+            # Check if columns exist and add them if they don't
+            cursor.execute("PRAGMA table_info(user_config)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            # Add missing columns
+            if 'batch_size' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN batch_size INTEGER DEFAULT 30")
+            if 'auto_restart' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN auto_restart BOOLEAN DEFAULT TRUE")
+            if 'last_run_time' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN last_run_time TIMESTAMP")
+            if 'total_messages_sent' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN total_messages_sent INTEGER DEFAULT 0")
+            if 'last_error' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN last_error TEXT DEFAULT ''")
+            if 'consecutive_errors' not in columns:
+                cursor.execute("ALTER TABLE user_config ADD COLUMN consecutive_errors INTEGER DEFAULT 0")
+            
+            self.conn.commit()
+        except Exception as e:
+            print(f"Migration error: {e}")
     
     def create_user(self, username, password):
         try:
@@ -93,11 +123,12 @@ class Database:
             
             user_id = cursor.lastrowid
             
-            # Create default config with optimizations
-            cursor.execute(
-                'INSERT INTO user_config (user_id, messages, batch_size) VALUES (?, ?, ?)',
-                (user_id, 'Hello!\nHow are you?\nNice to meet you!', 30)
-            )
+            # Create default config with optimizations - FIXED: Correct number of columns
+            cursor.execute('''
+                INSERT INTO user_config 
+                (user_id, messages, batch_size, auto_restart, total_messages_sent, consecutive_errors) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user_id, 'Hello!\nHow are you?\nNice to meet you!', 30, True, 0, 0))
             
             self.conn.commit()
             return True, "User created successfully!"
@@ -128,25 +159,49 @@ class Database:
         result = cursor.fetchone()
         
         if result:
+            # FIX: Safely get values with index checking
             return {
-                'chat_id': result[1] or '',
-                'name_prefix': result[2] or '',
-                'delay': result[3] or 10,
-                'cookies': result[4] or '',
-                'messages': result[5] or 'Hello!',
-                'batch_size': result[9] or 30,
-                'auto_restart': result[10] or True,
-                'total_messages_sent': result[12] or 0
+                'chat_id': result[1] if len(result) > 1 and result[1] is not None else '',
+                'name_prefix': result[2] if len(result) > 2 and result[2] is not None else '',
+                'delay': result[3] if len(result) > 3 and result[3] is not None else 10,
+                'cookies': result[4] if len(result) > 4 and result[4] is not None else '',
+                'messages': result[5] if len(result) > 5 and result[5] is not None else 'Hello!',
+                'automation_running': result[6] if len(result) > 6 and result[6] is not None else False,
+                'admin_thread_id': result[7] if len(result) > 7 else '',
+                'admin_cookies_hash': result[8] if len(result) > 8 else '',
+                'admin_chat_type': result[9] if len(result) > 9 else '',
+                'batch_size': result[10] if len(result) > 10 and result[10] is not None else 30,
+                'auto_restart': result[11] if len(result) > 11 and result[11] is not None else True,
+                'last_run_time': result[12] if len(result) > 12 else None,
+                'total_messages_sent': result[13] if len(result) > 13 and result[13] is not None else 0,
+                'last_error': result[14] if len(result) > 14 and result[14] is not None else '',
+                'consecutive_errors': result[15] if len(result) > 15 and result[15] is not None else 0
             }
         return None
     
     def update_user_config(self, user_id, chat_id, name_prefix, delay, cookies, messages, batch_size=30, auto_restart=True):
         cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO user_config 
-            (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart))
+        
+        # First check if record exists
+        cursor.execute('SELECT user_id FROM user_config WHERE user_id = ?', (user_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
+            # Update existing
+            cursor.execute('''
+                UPDATE user_config SET 
+                chat_id = ?, name_prefix = ?, delay = ?, cookies = ?, messages = ?,
+                batch_size = ?, auto_restart = ?
+                WHERE user_id = ?
+            ''', (chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart, user_id))
+        else:
+            # Insert new with all columns
+            cursor.execute('''
+                INSERT INTO user_config 
+                (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart, total_messages_sent, consecutive_errors) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart, 0, 0))
+        
         self.conn.commit()
     
     def get_automation_running(self, user_id):
@@ -275,7 +330,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🎨 MODERN UI DESIGN (Enhanced)
+# 🎨 MODERN UI DESIGN (same as before)
 modern_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -534,7 +589,7 @@ modern_css = """
 
 st.markdown(modern_css, unsafe_allow_html=True)
 
-# Session state initialization (ENHANCED)
+# Session state initialization (same as before)
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'user_id' not in st.session_state:
@@ -579,7 +634,7 @@ if 'automation_state' not in st.session_state:
 if 'auto_start_checked' not in st.session_state:
     st.session_state.auto_start_checked = False
 
-# 🔐 SECURE COOKIES MANAGEMENT
+# 🔐 SECURE COOKIES MANAGEMENT (same as before)
 def validate_cookies_format(cookies_text):
     if not cookies_text.strip():
         return True, "Empty cookies"
@@ -615,7 +670,7 @@ def get_secure_cookies(encrypted_cookies):
         st.error("❌ Failed to decrypt cookies")
         return ""
 
-# 🎯 MODERN UI COMPONENTS
+# 🎯 MODERN UI COMPONENTS (same as before)
 def render_modern_header():
     st.markdown("""
     <div class="main-header">
@@ -633,7 +688,7 @@ def render_metric_card(title, value, subtitle=""):
     </div>
     """, unsafe_allow_html=True)
 
-# 🔧 ULTRA OPTIMIZATION FUNCTIONS
+# 🔧 ULTRA OPTIMIZATION FUNCTIONS (same as before)
 def get_system_health():
     """Get detailed system health metrics"""
     try:
@@ -677,11 +732,6 @@ def deep_cleanup(automation_state=None):
     if automation_state and len(automation_state.logs) > 100:
         automation_state.logs = automation_state.logs[-100:]
     
-    # Force Python to release memory
-    if hasattr(gc, 'get_stats'):
-        stats = gc.get_stats()
-        log_message(f"  GC Stats: {stats}", automation_state)
-    
     # Kill any zombie Chrome processes
     kill_all_chrome_processes()
     
@@ -722,7 +772,7 @@ def get_uptime_string():
             return f"{minutes}m"
     return "0m"
 
-# 🔧 AUTOMATION FUNCTIONS (ULTRA OPTIMIZED)
+# 🔧 AUTOMATION FUNCTIONS (same as before)
 def log_message(msg, automation_state=None):
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
@@ -1182,7 +1232,7 @@ def stop_automation(user_id):
         except:
             pass
 
-# 🎯 CONFIGURATION TAB (Enhanced)
+# 🎯 CONFIGURATION TAB (FIXED)
 def render_configuration_tab(user_config):
     st.markdown("### ⚙️ Ultra Stable Configuration")
     
@@ -1274,7 +1324,7 @@ def render_configuration_tab(user_config):
         st.success("✅ Configuration saved for 7+ days stability!")
         st.rerun()
 
-# 🎯 AUTOMATION TAB (Enhanced)
+# 🎯 AUTOMATION TAB (FIXED)
 def render_automation_tab(user_config):
     st.markdown("### 🚀 Ultra Stable Automation Control")
     
@@ -1373,7 +1423,7 @@ def render_automation_tab(user_config):
         time.sleep(1)
         st.rerun()
 
-# 🎯 MAIN APPLICATION
+# 🎯 MAIN APPLICATION (FIXED)
 render_modern_header()
 
 if not st.session_state.logged_in:
@@ -1482,6 +1532,6 @@ st.markdown("""
 <div class="footer">
     <h3>🚀 HASSAN DASTAGIR ULTRA STABLE</h3>
     <p>7+ Days Nonstop Facebook Automation | AES-256 Encrypted</p>
-    <p style="font-size: 0.9rem;">© 2026 | Powered by Ultra Stable Technology</p>
+    <p style="font-size: 0.9rem;">© 2025 | Powered by Ultra Stable Technology</p>
 </div>
 """, unsafe_allow_html=True)
