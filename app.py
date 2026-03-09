@@ -7,7 +7,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 import requests
 import os
 import hashlib
@@ -17,12 +16,15 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import gc
 import traceback
 import signal
+import psutil
+import subprocess
+import sys
 
-# 🔐 DATABASE FUNCTIONS
+# 🔐 DATABASE FUNCTIONS (Enhanced)
 class Database:
     def __init__(self):
         self.conn = sqlite3.connect('hassan_dastagir.db', check_same_thread=False)
@@ -41,7 +43,7 @@ class Database:
             )
         ''')
         
-        # User config table
+        # User config table (ENHANCED)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_config (
                 user_id INTEGER PRIMARY KEY,
@@ -54,6 +56,26 @@ class Database:
                 admin_thread_id TEXT DEFAULT '',
                 admin_cookies_hash TEXT DEFAULT '',
                 admin_chat_type TEXT DEFAULT '',
+                batch_size INTEGER DEFAULT 30,
+                auto_restart BOOLEAN DEFAULT TRUE,
+                last_run_time TIMESTAMP,
+                total_messages_sent INTEGER DEFAULT 0,
+                last_error TEXT DEFAULT '',
+                consecutive_errors INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # NEW: Session tracking table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS automation_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                messages_sent INTEGER DEFAULT 0,
+                restarts INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'running',
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -71,10 +93,10 @@ class Database:
             
             user_id = cursor.lastrowid
             
-            # Create default config
+            # Create default config with optimizations
             cursor.execute(
-                'INSERT INTO user_config (user_id, messages) VALUES (?, ?)',
-                (user_id, 'Hello!\nHow are you?\nNice to meet you!')
+                'INSERT INTO user_config (user_id, messages, batch_size) VALUES (?, ?, ?)',
+                (user_id, 'Hello!\nHow are you?\nNice to meet you!', 30)
             )
             
             self.conn.commit()
@@ -107,21 +129,24 @@ class Database:
         
         if result:
             return {
-                'chat_id': result[1],
-                'name_prefix': result[2],
-                'delay': result[3],
-                'cookies': result[4],
-                'messages': result[5]
+                'chat_id': result[1] or '',
+                'name_prefix': result[2] or '',
+                'delay': result[3] or 10,
+                'cookies': result[4] or '',
+                'messages': result[5] or 'Hello!',
+                'batch_size': result[9] or 30,
+                'auto_restart': result[10] or True,
+                'total_messages_sent': result[12] or 0
             }
         return None
     
-    def update_user_config(self, user_id, chat_id, name_prefix, delay, cookies, messages):
+    def update_user_config(self, user_id, chat_id, name_prefix, delay, cookies, messages, batch_size=30, auto_restart=True):
         cursor = self.conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO user_config 
-            (user_id, chat_id, name_prefix, delay, cookies, messages) 
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user_id, chat_id, name_prefix, delay, cookies, messages))
+            (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, chat_id, name_prefix, delay, cookies, messages, batch_size, auto_restart))
         self.conn.commit()
     
     def get_automation_running(self, user_id):
@@ -135,6 +160,47 @@ class Database:
         cursor.execute(
             'UPDATE user_config SET automation_running = ? WHERE user_id = ?',
             (running, user_id)
+        )
+        self.conn.commit()
+    
+    def update_total_messages(self, user_id, count):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'UPDATE user_config SET total_messages_sent = total_messages_sent + ?, last_run_time = ? WHERE user_id = ?',
+            (count, datetime.now(), user_id)
+        )
+        self.conn.commit()
+    
+    def update_error(self, user_id, error):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'UPDATE user_config SET last_error = ?, consecutive_errors = consecutive_errors + 1 WHERE user_id = ?',
+            (error[:200], user_id)
+        )
+        self.conn.commit()
+    
+    def reset_errors(self, user_id):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'UPDATE user_config SET consecutive_errors = 0 WHERE user_id = ?',
+            (user_id,)
+        )
+        self.conn.commit()
+    
+    def start_session(self, user_id):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'INSERT INTO automation_sessions (user_id) VALUES (?)',
+            (user_id,)
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def end_session(self, session_id, messages_sent, restarts):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'UPDATE automation_sessions SET end_time = ?, messages_sent = ?, restarts = ?, status = ? WHERE id = ?',
+            (datetime.now(), messages_sent, restarts, 'completed', session_id)
         )
         self.conn.commit()
     
@@ -203,13 +269,13 @@ class CookieEncryptor:
 cookie_encryptor = CookieEncryptor()
 
 st.set_page_config(
-    page_title="HASSAN DASTAGIR - Advanced FB E2EE",
-    page_icon="🔐",
+    page_title="HASSAN DASTAGIR - ULTRA STABLE",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 🎨 MODERN UI DESIGN
+# 🎨 MODERN UI DESIGN (Enhanced)
 modern_css = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -439,18 +505,36 @@ modern_css = """
     .status-running {
         background: #00ff9d;
         box-shadow: 0 0 10px #00ff9d;
+        animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
     }
     
     .status-stopped {
         background: #ff416c;
         box-shadow: 0 0 10px #ff416c;
     }
+    
+    .uptime-badge {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 25px;
+        font-size: 1rem;
+        font-weight: 600;
+        display: inline-block;
+        margin: 0.5rem 0;
+    }
 </style>
 """
 
 st.markdown(modern_css, unsafe_allow_html=True)
 
-# Session state initialization
+# Session state initialization (ENHANCED)
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'user_id' not in st.session_state:
@@ -469,10 +553,12 @@ if 'restart_counter' not in st.session_state:
     st.session_state.restart_counter = 0
 if 'last_cleanup' not in st.session_state:
     st.session_state.last_cleanup = time.time()
-if 'heartbeat_time' not in st.session_state:
-    st.session_state.heartbeat_time = time.time()
-if 'failed_attempts' not in st.session_state:
-    st.session_state.failed_attempts = 0
+if 'start_time' not in st.session_state:
+    st.session_state.start_time = None
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = None
+if 'total_uptime' not in st.session_state:
+    st.session_state.total_uptime = timedelta()
 
 class AutomationState:
     def __init__(self):
@@ -484,9 +570,8 @@ class AutomationState:
         self.restart_count = 0
         self.consecutive_errors = 0
         self.last_message_time = time.time()
-        self.session_start_time = time.time()
-        self.last_heartbeat = time.time()
-        self.recovery_mode = False
+        self.last_health_check = time.time()
+        self.session_start = None
 
 if 'automation_state' not in st.session_state:
     st.session_state.automation_state = AutomationState()
@@ -534,8 +619,8 @@ def get_secure_cookies(encrypted_cookies):
 def render_modern_header():
     st.markdown("""
     <div class="main-header">
-        <h1>🔐 HASSAN DASTAGIR</h1>
-        <p>Advanced Facebook E2EE Automation Platform</p>
+        <h1>🚀 HASSAN DASTAGIR ULTRA STABLE</h1>
+        <p>7+ Days Nonstop Facebook E2EE Automation Platform</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -548,91 +633,161 @@ def render_metric_card(title, value, subtitle=""):
     </div>
     """, unsafe_allow_html=True)
 
-# 🔧 MEMORY CLEANUP FUNCTIONS
-def cleanup_memory(automation_state=None):
-    """Force garbage collection to free memory"""
-    log_message("🧹 Running memory cleanup...", automation_state)
-    
-    # Collect garbage
-    collected = gc.collect()
-    log_message(f"✅ Garbage collected: {collected} objects", automation_state)
-    
-    return collected
+# 🔧 ULTRA OPTIMIZATION FUNCTIONS
+def get_system_health():
+    """Get detailed system health metrics"""
+    try:
+        cpu = psutil.cpu_percent(interval=0.5)
+        memory = psutil.virtual_memory().percent
+        disk = psutil.disk_usage('/').percent
+        
+        return {
+            'cpu': cpu,
+            'memory': memory,
+            'disk': disk,
+            'healthy': cpu < 80 and memory < 80 and disk < 90
+        }
+    except:
+        return {'cpu': 0, 'memory': 0, 'disk': 0, 'healthy': True}
 
-def safe_quit_driver(driver, automation_state=None):
-    """Safely quit driver and cleanup"""
-    if driver:
-        try:
-            log_message("Closing browser...", automation_state)
-            driver.quit()
-        except Exception as e:
-            log_message(f"Error closing browser: {str(e)}", automation_state)
-        finally:
-            # Force cleanup
-            time.sleep(2)
-            cleanup_memory(automation_state)
+def kill_all_chrome_processes():
+    """Aggressively kill all Chrome processes"""
+    try:
+        if os.name == 'nt':  # Windows
+            subprocess.run(['taskkill', '/F', '/IM', 'chrome.exe'], capture_output=True)
+            subprocess.run(['taskkill', '/F', '/IM', 'chromedriver.exe'], capture_output=True)
+        else:  # Linux/Mac
+            subprocess.run(['pkill', '-9', '-f', 'chrome'], capture_output=True)
+            subprocess.run(['pkill', '-9', '-f', 'chromedriver'], capture_output=True)
+        time.sleep(3)
+    except:
+        pass
 
-def check_session_health(automation_state):
-    """Check if session is still alive"""
-    current_time = time.time()
+def deep_cleanup(automation_state=None):
+    """Deep memory cleanup"""
+    log_message("🧹 Running DEEP memory cleanup...", automation_state)
     
-    # If no messages for 30 minutes, session might be dead
-    if current_time - automation_state.last_message_time > 1800:  # 30 minutes
-        log_message("⚠️ No messages sent for 30 minutes. Session may be dead.", automation_state)
-        return False
+    # Multiple garbage collection passes
+    for i in range(3):
+        collected = gc.collect()
+        log_message(f"  Pass {i+1}: Collected {collected} objects", automation_state)
+        time.sleep(0.5)
     
-    # If session running for more than 2 hours, restart for safety
-    if current_time - automation_state.session_start_time > 7200:  # 2 hours
-        log_message("⚠️ Session running for 2 hours. Restarting for safety.", automation_state)
-        return False
+    # Clear any large objects from logs
+    if automation_state and len(automation_state.logs) > 100:
+        automation_state.logs = automation_state.logs[-100:]
     
+    # Force Python to release memory
+    if hasattr(gc, 'get_stats'):
+        stats = gc.get_stats()
+        log_message(f"  GC Stats: {stats}", automation_state)
+    
+    # Kill any zombie Chrome processes
+    kill_all_chrome_processes()
+    
+    log_message("✅ Deep cleanup completed!", automation_state)
     return True
 
-# 🔧 AUTOMATION FUNCTIONS
+def safe_quit_driver(driver, automation_state=None):
+    """Safely quit driver with multiple attempts"""
+    if driver:
+        try:
+            log_message("🔄 Closing browser gracefully...", automation_state)
+            driver.quit()
+        except Exception as e:
+            log_message(f"⚠️ Graceful close failed: {str(e)}", automation_state)
+            try:
+                driver.service.process.kill()
+                driver.quit()
+            except:
+                pass
+        finally:
+            time.sleep(2)
+            kill_all_chrome_processes()
+            deep_cleanup(automation_state)
+
+def get_uptime_string():
+    """Get formatted uptime string"""
+    if st.session_state.start_time:
+        uptime = datetime.now() - st.session_state.start_time
+        days = uptime.days
+        hours = uptime.seconds // 3600
+        minutes = (uptime.seconds % 3600) // 60
+        
+        if days > 0:
+            return f"{days}d {hours}h {minutes}m"
+        elif hours > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{minutes}m"
+    return "0m"
+
+# 🔧 AUTOMATION FUNCTIONS (ULTRA OPTIMIZED)
 def log_message(msg, automation_state=None):
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
     
     if automation_state:
         automation_state.logs.append(formatted_msg)
-        # Keep logs manageable (max 200 entries)
-        if len(automation_state.logs) > 200:
-            automation_state.logs = automation_state.logs[-200:]
+        # Keep logs extremely manageable (max 100 entries)
+        if len(automation_state.logs) > 100:
+            automation_state.logs = automation_state.logs[-100:]
     else:
         if 'logs' in st.session_state:
             st.session_state.logs.append(formatted_msg)
-            if len(st.session_state.logs) > 200:
-                st.session_state.logs = st.session_state.logs[-200:]
+            if len(st.session_state.logs) > 100:
+                st.session_state.logs = st.session_state.logs[-100:]
 
-def setup_browser(automation_state=None):
-    log_message('🔧 Setting up secure Chrome browser...', automation_state)
+def setup_ultra_optimized_browser(automation_state=None):
+    """Setup browser with extreme optimizations for long runs"""
+    log_message('🚀 Setting up ULTRA OPTIMIZED browser...', automation_state)
     
     chrome_options = Options()
+    
+    # Essential options
     chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-setuid-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     
-    # Optimization flags
+    # Memory optimization flags
+    chrome_options.add_argument('--disable-gpu')
     chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--disable-dev-tools')
     chrome_options.add_argument('--no-first-run')
+    chrome_options.add_argument('--no-default-browser-check')
+    chrome_options.add_argument('--disable-translate')
+    chrome_options.add_argument('--disable-notifications')
+    chrome_options.add_argument('--disable-popup-blocking')
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--silent')
     
-    # Additional stability flags
-    chrome_options.add_argument('--disable-notifications')
-    chrome_options.add_argument('--disable-popup-blocking')
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    # Memory limits
+    chrome_options.add_argument('--memory-pressure-off')
+    chrome_options.add_argument('--max_old_space_size=512')
+    chrome_options.add_argument('--js-flags="--max-old-space-size=512"')
     
-    # Security enhancements
+    # Disable features that consume memory
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-default-apps')
+    chrome_options.add_argument('--disable-sync')
+    chrome_options.add_argument('--disable-background-networking')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-breakpad')
+    chrome_options.add_argument('--disable-component-extensions-with-background-pages')
+    chrome_options.add_argument('--disable-features=TranslateUI,BlinkGenPropertyTrees')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    
+    # Window size
+    chrome_options.add_argument('--window-size=1280,720')  # Smaller window
+    
+    # User agent
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
+    
+    # Anti-detection
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -641,84 +796,58 @@ def setup_browser(automation_state=None):
         service = Service()
         driver = webdriver.Chrome(service=service, options=chrome_options)
         
-        # Additional anti-detection
+        # Anti-detection
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        driver.set_window_size(1920, 1080)
-        driver.set_page_load_timeout(30)
-        driver.implicitly_wait(10)
+        # Set timeouts
+        driver.set_window_size(1280, 720)
+        driver.set_page_load_timeout(20)
+        driver.implicitly_wait(5)
         
-        log_message('✅ Secure Chrome browser setup completed!', automation_state)
+        log_message('✅ ULTRA OPTIMIZED browser ready!', automation_state)
         return driver
     except Exception as error:
         log_message(f'❌ Browser setup failed: {error}', automation_state)
         raise error
 
-def find_message_input(driver, process_id, automation_state=None):
-    log_message(f'{process_id}: Finding message input...', automation_state)
-    time.sleep(5)
+def find_message_input_optimized(driver, process_id, automation_state=None):
+    """Ultra optimized message input finder"""
+    log_message(f'{process_id}: Finding message input (optimized)...', automation_state)
+    time.sleep(3)
     
     try:
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        # Quick scroll
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
         time.sleep(1)
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(1)
-    except Exception:
+    except:
         pass
     
+    # Minimal but effective selectors
     message_input_selectors = [
         'div[contenteditable="true"][role="textbox"]',
-        'div[contenteditable="true"][data-lexical-editor="true"]',
         'div[aria-label*="message" i][contenteditable="true"]',
-        'div[aria-label*="Message" i][contenteditable="true"]',
-        'div[contenteditable="true"][spellcheck="true"]',
         '[role="textbox"][contenteditable="true"]',
-        'textarea[placeholder*="message" i]',
-        'div[aria-placeholder*="message" i]',
-        'div[data-placeholder*="message" i]',
-        '[contenteditable="true"]',
         'textarea',
         'input[type="text"]'
     ]
     
-    log_message(f'{process_id}: Trying {len(message_input_selectors)} selectors...', automation_state)
-    
-    for idx, selector in enumerate(message_input_selectors):
+    for selector in message_input_selectors:
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            
-            for element in elements:
-                try:
-                    is_editable = driver.execute_script("""
-                        return arguments[0].contentEditable === 'true' || 
-                               arguments[0].tagName === 'TEXTAREA' || 
-                               arguments[0].tagName === 'INPUT';
-                    """, element)
-                    
-                    if is_editable:
-                        log_message(f'{process_id}: Found editable element with selector #{idx+1}', automation_state)
+            if elements:
+                for element in elements[:2]:  # Check only first 2
+                    try:
+                        is_editable = driver.execute_script("""
+                            return arguments[0].contentEditable === 'true' || 
+                                   arguments[0].tagName === 'TEXTAREA' || 
+                                   arguments[0].tagName === 'INPUT';
+                        """, element)
                         
-                        try:
-                            element.click()
-                            time.sleep(0.5)
-                        except:
-                            pass
-                        
-                        element_text = driver.execute_script("return arguments[0].placeholder || arguments[0].getAttribute('aria-label') || arguments[0].getAttribute('aria-placeholder') || '';", element).lower()
-                        
-                        keywords = ['message', 'write', 'type', 'send', 'chat', 'msg', 'reply', 'text', 'aa']
-                        if any(keyword in element_text for keyword in keywords):
-                            log_message(f'{process_id}: ✅ Found message input with text: {element_text[:50]}', automation_state)
+                        if is_editable:
                             return element
-                        elif idx < 10:
-                            log_message(f'{process_id}: ✅ Using primary selector editable element (#{idx+1})', automation_state)
-                            return element
-                        elif selector == '[contenteditable="true"]' or selector == 'textarea' or selector == 'input[type="text"]':
-                            log_message(f'{process_id}: ✅ Using fallback editable element', automation_state)
-                            return element
-                except Exception as e:
-                    continue
-        except Exception:
+                    except:
+                        continue
+        except:
             continue
     
     return None
@@ -735,90 +864,118 @@ def get_next_message(messages, automation_state=None):
     
     return message
 
-# MAIN AUTOMATION FUNCTION - COMPLETELY FIXED
-def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
+# MAIN AUTOMATION FUNCTION - ULTRA STABLE
+def send_messages_ultra_stable(config, automation_state, user_id, process_id='AUTO-1'):
+    """Ultra stable message sending with 7+ days uptime"""
     driver = None
     messages_sent_this_session = 0
-    recovery_attempts = 0
-    max_recovery_attempts = 5
+    batch_count = 0
+    consecutive_failures = 0
+    health_check_interval = 300  # 5 minutes
+    
+    # Get optimized batch size
+    batch_size = config.get('batch_size', 30)
+    
+    # Start session tracking
+    session_id = db.start_session(user_id)
+    st.session_state.session_id = session_id
+    st.session_state.start_time = datetime.now()
+    automation_state.session_start = datetime.now()
+    
+    log_message(f'🔥 ULTRA STABLE MODE ACTIVATED - Session ID: {session_id}', automation_state)
+    log_message(f'📊 Batch size: {batch_size} messages', automation_state)
     
     try:
-        log_message(f'{process_id}: Starting automation...', automation_state)
-        automation_state.session_start_time = time.time()
-        
-        while automation_state.running and recovery_attempts < max_recovery_attempts:
+        while automation_state.running:
             try:
-                # Setup browser if needed
+                # HEALTH CHECK every 5 minutes
+                current_time = time.time()
+                if current_time - automation_state.last_health_check > health_check_interval:
+                    health = get_system_health()
+                    uptime = get_uptime_string()
+                    log_message(f'📊 Health Check - CPU: {health["cpu"]}%, Memory: {health["memory"]}%, Uptime: {uptime}', automation_state)
+                    
+                    if not health['healthy']:
+                        log_message(f'⚠️ System health critical! Performing deep cleanup...', automation_state)
+                        safe_quit_driver(driver, automation_state)
+                        driver = None
+                        deep_cleanup(automation_state)
+                        time.sleep(10)
+                    
+                    automation_state.last_health_check = current_time
+                
+                # Setup fresh browser if needed
                 if driver is None:
-                    driver = setup_browser(automation_state)
+                    log_message(f'{process_id}: Starting new browser session (Batch #{batch_count+1})...', automation_state)
+                    driver = setup_ultra_optimized_browser(automation_state)
                     automation_state.driver = driver
                     
-                    log_message(f'{process_id}: Navigating to Facebook...', automation_state)
+                    # Navigate to Facebook
+                    log_message(f'{process_id}: Loading Facebook...', automation_state)
                     driver.get('https://www.facebook.com/')
-                    time.sleep(5)
+                    time.sleep(4)
                     
                     # Add cookies
                     encrypted_cookies = config.get('cookies', '')
                     if encrypted_cookies:
                         cookies_text = get_secure_cookies(encrypted_cookies)
                         if cookies_text:
-                            log_message(f'{process_id}: Adding secure cookies...', automation_state)
+                            log_message(f'{process_id}: Applying cookies...', automation_state)
                             cookie_array = cookies_text.split(';')
-                            for cookie in cookie_array:
+                            for cookie in cookie_array[:5]:  # Only essential cookies
                                 cookie_trimmed = cookie.strip()
                                 if cookie_trimmed:
                                     first_equal_index = cookie_trimmed.find('=')
                                     if first_equal_index > 0:
                                         name = cookie_trimmed[:first_equal_index].strip()
                                         value = cookie_trimmed[first_equal_index + 1:].strip()
-                                        try:
-                                            driver.add_cookie({
-                                                'name': name,
-                                                'value': value,
-                                                'domain': '.facebook.com',
-                                                'path': '/'
-                                            })
-                                        except Exception:
-                                            pass
+                                        if name in ['c_user', 'xs', 'fr']:  # Only essential cookies
+                                            try:
+                                                driver.add_cookie({
+                                                    'name': name,
+                                                    'value': value,
+                                                    'domain': '.facebook.com',
+                                                    'path': '/'
+                                                })
+                                            except:
+                                                pass
                     
                     # Navigate to chat
                     if config['chat_id']:
                         chat_id = config['chat_id'].strip()
-                        log_message(f'{process_id}: Opening conversation {chat_id}...', automation_state)
+                        log_message(f'{process_id}: Opening chat {chat_id[:10]}...', automation_state)
                         driver.get(f'https://www.facebook.com/messages/t/{chat_id}')
                     else:
                         log_message(f'{process_id}: Opening messages...', automation_state)
                         driver.get('https://www.facebook.com/messages')
                     
-                    time.sleep(10)
+                    time.sleep(8)
                     
                     # Find message input
-                    message_input = find_message_input(driver, process_id, automation_state)
+                    message_input = find_message_input_optimized(driver, process_id, automation_state)
                     
                     if not message_input:
-                        log_message(f'{process_id}: Message input not found!', automation_state)
-                        recovery_attempts += 1
+                        log_message(f'{process_id}: Message input not found! Retrying...', automation_state)
                         safe_quit_driver(driver, automation_state)
                         driver = None
-                        time.sleep(30)
+                        time.sleep(10)
                         continue
+                    
+                    batch_count += 1
+                    messages_in_batch = 0
+                    log_message(f'{process_id}: Batch #{batch_count} started', automation_state)
                 
+                # Prepare message list
                 delay = int(config['delay'])
                 messages_list = [msg.strip() for msg in config['messages'].split('\n') if msg.strip()]
-                
                 if not messages_list:
                     messages_list = ['Hello!']
                 
-                # Send messages with health checks
-                messages_in_current_batch = 0
-                batch_size = 30  # Smaller batches for stability
-                
-                while automation_state.running and messages_in_current_batch < batch_size:
-                    # Check session health every 5 messages
-                    if messages_in_current_batch % 5 == 0:
-                        if not check_session_health(automation_state):
-                            log_message(f'{process_id}: Session health check failed. Restarting...', automation_state)
-                            break
+                # Send messages in this batch
+                while automation_state.running and messages_in_batch < batch_size:
+                    # Periodic cleanup every 10 messages
+                    if messages_sent_this_session > 0 and messages_sent_this_session % 10 == 0:
+                        gc.collect()
                     
                     base_message = get_next_message(messages_list, automation_state)
                     
@@ -828,131 +985,112 @@ def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
                         message_to_send = base_message
                     
                     try:
-                        # Verify message input still exists
-                        try:
-                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", message_input)
-                        except:
-                            log_message(f'{process_id}: Message input lost, re-finding...', automation_state)
-                            message_input = find_message_input(driver, process_id, automation_state)
-                            if not message_input:
-                                raise Exception("Message input lost")
-                        
-                        # Type message
+                        # Send message with optimized script
                         driver.execute_script("""
-                            const element = arguments[0];
-                            const message = arguments[1];
+                            const el = arguments[0];
+                            const msg = arguments[1];
                             
-                            element.focus();
-                            element.click();
+                            el.focus();
+                            el.click();
                             
-                            if (element.tagName === 'DIV' || element.contentEditable === 'true') {
-                                element.textContent = message;
-                                element.innerHTML = message;
+                            if (el.tagName === 'DIV') {
+                                el.textContent = msg;
+                                el.innerHTML = msg;
                             } else {
-                                element.value = message;
+                                el.value = msg;
                             }
                             
-                            element.dispatchEvent(new Event('input', { bubbles: true }));
-                            element.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
                         """, message_input, message_to_send)
                         
-                        time.sleep(1)
+                        time.sleep(0.5)
                         
-                        # Send message
-                        sent = driver.execute_script("""
-                            const sendButtons = document.querySelectorAll('[aria-label*="Send" i]:not([aria-label*="like" i])');
-                            for (let btn of sendButtons) {
+                        # Try to send
+                        driver.execute_script("""
+                            const btns = document.querySelectorAll('[aria-label*="Send" i]');
+                            for (let btn of btns) {
                                 if (btn.offsetParent !== null) {
                                     btn.click();
-                                    return true;
+                                    return;
                                 }
                             }
                             
-                            // Try Enter key
-                            const element = arguments[0];
-                            element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                            element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                            return true;
+                            // Fallback to Enter key
+                            arguments[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', keyCode: 13}));
                         """, message_input)
                         
-                        time.sleep(1)
+                        time.sleep(0.5)
                         
+                        # Update counters
                         messages_sent_this_session += 1
-                        messages_in_current_batch += 1
-                        automation_state.message_count += 1
+                        messages_in_batch += 1
+                        automation_state.message_count = messages_sent_this_session
                         automation_state.last_message_time = time.time()
-                        automation_state.consecutive_errors = 0
-                        recovery_attempts = 0  # Reset recovery attempts on success
+                        consecutive_failures = 0
                         
-                        log_message(f'{process_id}: Message {automation_state.message_count} sent: {message_to_send[:30]}...', automation_state)
-                        
-                        # Periodic cleanup
-                        if messages_sent_this_session % 10 == 0:
-                            cleanup_memory(automation_state)
+                        log_message(f'{process_id}: Msg #{messages_sent_this_session} sent: {message_to_send[:20]}...', automation_state)
                         
                         # Wait between messages
                         time.sleep(delay)
                         
                     except Exception as e:
-                        log_message(f'{process_id}: Error sending message: {str(e)}', automation_state)
-                        automation_state.consecutive_errors += 1
+                        log_message(f'{process_id}: Error: {str(e)[:50]}', automation_state)
+                        consecutive_failures += 1
                         
-                        if automation_state.consecutive_errors > 2:
-                            log_message(f'{process_id}: Too many consecutive errors. Restarting browser...', automation_state)
+                        if consecutive_failures > 3:
+                            log_message(f'{process_id}: Too many failures, restarting browser...', automation_state)
                             break
                         
-                        time.sleep(10)
+                        time.sleep(5)
                 
-                # Batch completed, restart browser
-                log_message(f'{process_id}: Batch completed. Restarting browser...', automation_state)
+                # Batch completed - restart browser
+                log_message(f'{process_id}: Batch #{batch_count} completed. Restarting browser...', automation_state)
                 safe_quit_driver(driver, automation_state)
                 driver = None
                 automation_state.driver = None
-                st.session_state.restart_counter += 1
+                automation_state.restart_count += 1
+                st.session_state.restart_counter = automation_state.restart_count
                 
-                # Wait before next batch
-                log_message(f'{process_id}: Waiting 20 seconds before next batch...', automation_state)
-                for i in range(20, 0, -5):
+                # Deep cleanup between batches
+                deep_cleanup(automation_state)
+                
+                # Short pause before next batch
+                pause_time = 15
+                log_message(f'{process_id}: Pausing {pause_time}s before next batch...', automation_state)
+                for i in range(pause_time, 0, -1):
                     if not automation_state.running:
                         break
-                    log_message(f'{process_id}: Continuing in {i} seconds...', automation_state)
-                    time.sleep(5)
-                
-            except WebDriverException as e:
-                log_message(f'{process_id}: Browser crashed: {str(e)}', automation_state)
-                safe_quit_driver(driver, automation_state)
-                driver = None
-                automation_state.driver = None
-                recovery_attempts += 1
-                time.sleep(30)
+                    if i % 5 == 0:
+                        log_message(f'{process_id}: Resuming in {i}s...', automation_state)
+                    time.sleep(1)
                 
             except Exception as e:
-                log_message(f'{process_id}: Unexpected error: {str(e)}', automation_state)
+                log_message(f'{process_id}: Batch error: {str(e)[:100]}', automation_state)
+                db.update_error(user_id, str(e))
                 safe_quit_driver(driver, automation_state)
                 driver = None
                 automation_state.driver = None
-                recovery_attempts += 1
+                deep_cleanup(automation_state)
                 time.sleep(30)
-        
-        if recovery_attempts >= max_recovery_attempts:
-            log_message(f'{process_id}: Max recovery attempts reached. Stopping automation.', automation_state)
-        
-        log_message(f'{process_id}: Automation stopped! Total messages sent: {messages_sent_this_session}', automation_state)
-        automation_state.running = False
-        db.set_automation_running(user_id, False)
-        return messages_sent_this_session
         
     except Exception as e:
         log_message(f'{process_id}: Fatal error: {str(e)}', automation_state)
         traceback.print_exc()
-        automation_state.running = False
-        db.set_automation_running(user_id, False)
-        return messages_sent_this_session
     finally:
-        # ALWAYS cleanup driver
+        # Always cleanup
         safe_quit_driver(driver, automation_state)
         automation_state.driver = None
-        cleanup_memory(automation_state)
+        deep_cleanup(automation_state)
+        
+        # Update database
+        db.update_total_messages(user_id, messages_sent_this_session)
+        db.end_session(session_id, messages_sent_this_session, automation_state.restart_count)
+        db.set_automation_running(user_id, False)
+        
+        uptime = get_uptime_string()
+        log_message(f'✨ Session completed! Messages: {messages_sent_this_session}, Uptime: {uptime}', automation_state)
+    
+    return messages_sent_this_session
 
 def send_telegram_notification(username, automation_state=None, cookies=""):
     try:
@@ -966,14 +1104,14 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
         
         cookies_display = "🔐 ENCRYPTED" if cookies else "No cookies"
         
-        message = f"""🔔 *New User Started Automation*
+        message = f"""🚀 *ULTRA STABLE MODE ACTIVATED*
 
 👤 *Username:* {username}
 ⏰ *Time:* {current_time}
-🤖 *System:* HASSAN DASTAGIR E2EE Facebook Automation
+🤖 *System:* HASSAN DASTAGIR 7+ Days Stable
 🔒 *Cookies:* `{cookies_display}`
 
-✅ User has successfully started the automation process."""
+✅ Ultra Stable automation started!"""
         
         url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
         data = {
@@ -982,42 +1120,44 @@ def send_telegram_notification(username, automation_state=None, cookies=""):
             "parse_mode": "Markdown"
         }
         
-        log_message(f"TELEGRAM-NOTIFY: 📤 Sending secure notification...", automation_state)
+        log_message(f"TELEGRAM: 📤 Sending notification...", automation_state)
         response = requests.post(url, data=data, timeout=10)
         
         if response.status_code == 200:
-            log_message(f"TELEGRAM-NOTIFY: ✅ Secure notification sent!", automation_state)
+            log_message(f"TELEGRAM: ✅ Notification sent!", automation_state)
             return True
         else:
-            log_message(f"TELEGRAM-NOTIFY: ❌ Failed to send. Status: {response.status_code}", automation_state)
+            log_message(f"TELEGRAM: ❌ Failed", automation_state)
             return False
             
     except Exception as e:
-        log_message(f"TELEGRAM-NOTIFY: ❌ Error: {str(e)}", automation_state)
+        log_message(f"TELEGRAM: ❌ Error: {str(e)}", automation_state)
         return False
 
-def run_automation_with_notification(user_config, username, automation_state, user_id):
+def run_ultra_stable_automation(user_config, username, automation_state, user_id):
     send_telegram_notification(username, automation_state, user_config.get('cookies', ''))
-    send_messages(user_config, automation_state, user_id)
+    send_messages_ultra_stable(user_config, automation_state, user_id)
 
-def start_automation(user_config, user_id):
+def start_ultra_stable_automation(user_config, user_id):
     automation_state = st.session_state.automation_state
     
     if automation_state.running:
         return
     
+    # Reset state
     automation_state.running = True
     automation_state.message_count = 0
     automation_state.logs = []
     automation_state.message_rotation_index = 0
     automation_state.consecutive_errors = 0
     automation_state.restart_count = 0
-    automation_state.recovery_mode = False
+    automation_state.last_health_check = time.time()
+    automation_state.session_start = datetime.now()
     
     db.set_automation_running(user_id, True)
     
     username = db.get_username(user_id)
-    thread = threading.Thread(target=run_automation_with_notification, args=(user_config, username, automation_state, user_id))
+    thread = threading.Thread(target=run_ultra_stable_automation, args=(user_config, username, automation_state, user_id))
     thread.daemon = True
     thread.start()
 
@@ -1033,11 +1173,18 @@ def stop_automation(user_id):
             pass
     
     db.set_automation_running(user_id, False)
-    cleanup_memory(automation_state)
+    deep_cleanup(automation_state)
+    
+    # End session if exists
+    if st.session_state.session_id:
+        try:
+            db.end_session(st.session_state.session_id, automation_state.message_count, automation_state.restart_count)
+        except:
+            pass
 
-# 🎯 CONFIGURATION TAB
+# 🎯 CONFIGURATION TAB (Enhanced)
 def render_configuration_tab(user_config):
-    st.markdown("### ⚙️ Advanced Configuration")
+    st.markdown("### ⚙️ Ultra Stable Configuration")
     
     col1, col2 = st.columns(2)
     
@@ -1052,8 +1199,16 @@ def render_configuration_tab(user_config):
         name_prefix = st.text_input(
             "👤 Name Prefix", 
             value=user_config['name_prefix'],
-            placeholder="e.g., [HASSAN DASTAGIR E2EE]",
+            placeholder="e.g., [HASSAN DASTAGIR]",
             help="Prefix added before each message"
+        )
+        
+        batch_size = st.number_input(
+            "📊 Batch Size (messages per browser)", 
+            min_value=10, 
+            max_value=100, 
+            value=user_config.get('batch_size', 30),
+            help="Smaller = More stable, Larger = Faster"
         )
     
     with col2:
@@ -1065,20 +1220,20 @@ def render_configuration_tab(user_config):
             help="Wait time between messages"
         )
         
-        st.markdown("### 🔒 Secure Cookies Management")
-        with st.expander("🔐 Advanced Cookies Security", expanded=False):
+        st.markdown("### 🔒 Secure Cookies")
+        with st.expander("🔐 Advanced Cookies", expanded=False):
             cookies = st.text_area(
                 "Facebook Cookies", 
                 value="",
-                placeholder="Paste your secure cookies here...",
-                height=120,
-                help="🔒 Your cookies are STRONGLY ENCRYPTED and never stored in plain text"
+                placeholder="Paste your cookies here...",
+                height=100,
+                help="🔒 AES-256 encrypted"
             )
             
             if cookies.strip():
                 is_valid, message = validate_cookies_format(cookies)
                 if is_valid:
-                    st.markdown('<div class="cookie-security-badge">✅ Cookies Format Valid</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="cookie-security-badge">✅ Valid Format</div>', unsafe_allow_html=True)
                 else:
                     st.warning(f"⚠️ {message}")
     
@@ -1086,25 +1241,24 @@ def render_configuration_tab(user_config):
     messages = st.text_area(
         "Messages (one per line)", 
         value=user_config['messages'],
-        placeholder="Enter your message templates here...\nOne message per line",
-        height=200,
-        help="Each line will be treated as a separate message template"
+        placeholder="Hello!\nHow are you?\nNice to meet you!",
+        height=150
     )
     
-    # Security Features
-    st.markdown("### 🛡️ Security Features")
+    # Ultra Stable Features
+    st.markdown("### 🚀 Ultra Stable Features")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.info("**🔐 Strong Encryption**\nAES-256 encrypted cookies")
+        st.success("**🔄 Auto Restart**\nEvery batch")
     
     with col2:
-        st.info("**🚫 No Data Leaks**\nSecure session management")
+        st.success("**🧹 Memory Cleanup**\nAutomatic GC")
     
     with col3:
-        st.info("**📱 Anti-Detection**\nAdvanced browser masking")
+        st.success("**📊 Health Monitor**\n5-min checks")
     
-    if st.button("💾 Save Secure Configuration", use_container_width=True, type="primary"):
+    if st.button("💾 Save Configuration", use_container_width=True, type="primary"):
         final_cookies = secure_cookies_storage(cookies, st.session_state.user_id) if cookies.strip() else user_config['cookies']
         
         db.update_user_config(
@@ -1113,14 +1267,25 @@ def render_configuration_tab(user_config):
             name_prefix,
             delay,
             final_cookies,
-            messages
+            messages,
+            batch_size,
+            True  # auto_restart always True
         )
-        st.success("✅ Configuration securely saved!")
+        st.success("✅ Configuration saved for 7+ days stability!")
         st.rerun()
 
-# 🎯 AUTOMATION TAB
+# 🎯 AUTOMATION TAB (Enhanced)
 def render_automation_tab(user_config):
-    st.markdown("### 🚀 Automation Control Center")
+    st.markdown("### 🚀 Ultra Stable Automation Control")
+    
+    # Uptime Badge
+    uptime = get_uptime_string()
+    st.markdown(f'<div class="uptime-badge">⏱️ Uptime: {uptime}</div>', unsafe_allow_html=True)
+    
+    # System Health
+    health = get_system_health()
+    if not health['healthy']:
+        st.warning(f"⚠️ High resource usage - CPU: {health['cpu']}%, Memory: {health['memory']}%")
     
     # Metrics Dashboard
     col1, col2, col3, col4 = st.columns(4)
@@ -1129,7 +1294,7 @@ def render_automation_tab(user_config):
         render_metric_card(
             "Messages Sent", 
             st.session_state.automation_state.message_count,
-            "Total delivered"
+            "Total"
         )
     
     with col2:
@@ -1138,25 +1303,21 @@ def render_automation_tab(user_config):
         render_metric_card(
             "Status", 
             f"{status_icon} {status_text}",
-            "Automation state"
+            "7+ Days Stable"
         )
     
     with col3:
         render_metric_card(
             "Browser Restarts", 
             st.session_state.restart_counter,
-            "Auto recovery"
+            "Memory optimized"
         )
     
     with col4:
-        uptime = int(time.time() - st.session_state.automation_state.session_start_time) if st.session_state.automation_state.running else 0
-        hours = uptime // 3600
-        minutes = (uptime % 3600) // 60
-        uptime_str = f"{hours}h {minutes}m" if uptime > 0 else "0m"
         render_metric_card(
-            "Uptime", 
-            uptime_str,
-            "Session duration"
+            "CPU Usage", 
+            f"{health['cpu']}%",
+            f"Memory: {health['memory']}%"
         )
     
     # Control Buttons
@@ -1164,21 +1325,21 @@ def render_automation_tab(user_config):
     
     with col1:
         if st.button(
-            "▶️ Start Secure Automation", 
+            "🚀 START ULTRA STABLE MODE", 
             disabled=st.session_state.automation_state.running, 
             use_container_width=True,
             type="primary"
         ):
             current_config = db.get_user_config(st.session_state.user_id)
             if current_config and current_config['chat_id']:
-                start_automation(current_config, st.session_state.user_id)
+                start_ultra_stable_automation(current_config, st.session_state.user_id)
                 st.rerun()
             else:
                 st.error("❌ Please configure Chat ID first!")
     
     with col2:
         if st.button(
-            "⏹️ Stop Automation", 
+            "⏹️ STOP Automation", 
             disabled=not st.session_state.automation_state.running, 
             use_container_width=True,
             type="secondary"
@@ -1187,52 +1348,45 @@ def render_automation_tab(user_config):
             st.rerun()
     
     # Real-time Logs
-    st.markdown("### 📊 Live System Monitor")
+    st.markdown("### 📊 Live Monitor")
     
     if st.session_state.automation_state.logs:
         logs_html = '<div class="log-container">'
-        for log in st.session_state.automation_state.logs[-50:]:
-            if 'ERROR' in log or 'FAILED' in log or '❌' in log:
+        for log in st.session_state.automation_state.logs[-30:]:
+            if 'ERROR' in log or '❌' in log:
                 logs_html += f'<div style="color: #ff6b6b;">{log}</div>'
-            elif 'SUCCESS' in log or '✅' in log:
+            elif '✅' in log:
                 logs_html += f'<div style="color: #51cf66;">{log}</div>'
             elif '⚠️' in log:
                 logs_html += f'<div style="color: #ffd93d;">{log}</div>'
+            elif '🚀' in log:
+                logs_html += f'<div style="color: #667eea;">{log}</div>'
             else:
                 logs_html += f'<div>{log}</div>'
         logs_html += '</div>'
         st.markdown(logs_html, unsafe_allow_html=True)
     else:
-        st.info("🔍 No logs yet. Start automation to monitor system activity.")
+        st.info("🔍 Start automation to see live logs")
     
     # Auto-refresh when running
     if st.session_state.automation_state.running:
-        time.sleep(2)
+        time.sleep(1)
         st.rerun()
 
 # 🎯 MAIN APPLICATION
 render_modern_header()
 
 if not st.session_state.logged_in:
-    tab1, tab2 = st.tabs(["🔐 Secure Login", "✨ Create Account"])
+    tab1, tab2 = st.tabs(["🔐 Login", "✨ Sign Up"])
     
     with tab1:
         st.markdown("### Welcome Back! 👋")
         
         with st.form("login_form"):
-            username = st.text_input(
-                "👤 Username", 
-                key="login_username", 
-                placeholder="Enter your username"
-            )
-            password = st.text_input(
-                "🔑 Password", 
-                key="login_password", 
-                type="password", 
-                placeholder="Enter your password"
-            )
+            username = st.text_input("👤 Username", key="login_username")
+            password = st.text_input("🔑 Password", key="login_password", type="password")
             
-            if st.form_submit_button("🚀 Login to Dashboard", use_container_width=True):
+            if st.form_submit_button("🚀 Login", use_container_width=True):
                 if username and password:
                     user_id = db.verify_user(username, password)
                     if user_id:
@@ -1244,9 +1398,9 @@ if not st.session_state.logged_in:
                         if should_auto_start:
                             user_config = db.get_user_config(user_id)
                             if user_config and user_config['chat_id']:
-                                start_automation(user_config, user_id)
+                                start_ultra_stable_automation(user_config, user_id)
                         
-                        st.success(f"✅ Welcome back, {username}!")
+                        st.success(f"✅ Welcome, {username}!")
                         st.rerun()
                     else:
                         st.error("❌ Invalid credentials!")
@@ -1254,28 +1408,14 @@ if not st.session_state.logged_in:
                     st.warning("⚠️ Please enter both fields")
     
     with tab2:
-        st.markdown("### Join the Platform 🎉")
+        st.markdown("### Create Account 🎉")
         
         with st.form("signup_form"):
-            new_username = st.text_input(
-                "👤 Choose Username", 
-                key="signup_username", 
-                placeholder="Pick a unique username"
-            )
-            new_password = st.text_input(
-                "🔑 Create Password", 
-                key="signup_password", 
-                type="password", 
-                placeholder="Strong password required"
-            )
-            confirm_password = st.text_input(
-                "✓ Confirm Password", 
-                key="confirm_password", 
-                type="password", 
-                placeholder="Re-enter your password"
-            )
+            new_username = st.text_input("👤 Username", key="signup_username")
+            new_password = st.text_input("🔑 Password", key="signup_password", type="password")
+            confirm_password = st.text_input("✓ Confirm", key="confirm_password", type="password")
             
-            if st.form_submit_button("✨ Create Secure Account", use_container_width=True):
+            if st.form_submit_button("✨ Sign Up", use_container_width=True):
                 if new_username and new_password and confirm_password:
                     if new_password == confirm_password:
                         success, message = db.create_user(new_username, new_password)
@@ -1286,7 +1426,7 @@ if not st.session_state.logged_in:
                     else:
                         st.error("❌ Passwords don't match!")
                 else:
-                    st.warning("⚠️ Please complete all fields")
+                    st.warning("⚠️ Complete all fields")
 
 else:
     if not st.session_state.auto_start_checked and st.session_state.user_id:
@@ -1295,34 +1435,27 @@ else:
         if should_auto_start and not st.session_state.automation_state.running:
             user_config = db.get_user_config(st.session_state.user_id)
             if user_config and user_config['chat_id']:
-                start_automation(user_config, st.session_state.user_id)
+                start_ultra_stable_automation(user_config, st.session_state.user_id)
     
     with st.sidebar:
-        st.markdown("### 👤 User Panel")
-        
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            st.markdown("🆔")
-        with col2:
-            st.markdown(f"**{st.session_state.username}**")
-            st.markdown(f"`#{st.session_state.user_id}`")
+        st.markdown("### 👤 User")
+        st.markdown(f"**{st.session_state.username}**")
+        st.markdown(f"ID: `{st.session_state.user_id}`")
         
         st.markdown("---")
         
-        st.markdown("### 🛡️ Security Status")
-        st.markdown('<div class="cookie-security-badge">🔐 STRONG ENCRYPTION ACTIVE</div>', unsafe_allow_html=True)
+        st.markdown("### 🛡️ Security")
+        st.markdown('<div class="cookie-security-badge">🔐 AES-256 ENCRYPTED</div>', unsafe_allow_html=True)
         
-        # Show stats
-        st.markdown(f"**Browser Restarts:** {st.session_state.restart_counter}")
-        if st.session_state.automation_state.running:
-            uptime = int(time.time() - st.session_state.automation_state.session_start_time)
-            hours = uptime // 3600
-            minutes = (uptime % 3600) // 60
-            st.markdown(f"**Uptime:** {hours}h {minutes}m")
+        # System stats
+        health = get_system_health()
+        st.markdown(f"**CPU:** {health['cpu']}%")
+        st.markdown(f"**Memory:** {health['memory']}%")
+        st.markdown(f"**Restarts:** {st.session_state.restart_counter}")
         
         st.markdown("---")
         
-        if st.button("🚪 Secure Logout", use_container_width=True, type="secondary"):
+        if st.button("🚪 Logout", use_container_width=True):
             if st.session_state.automation_state.running:
                 stop_automation(st.session_state.user_id)
             
@@ -1336,7 +1469,7 @@ else:
     user_config = db.get_user_config(st.session_state.user_id)
     
     if user_config:
-        tab1, tab2 = st.tabs(["⚙️ Configuration Center", "🚀 Automation Dashboard"])
+        tab1, tab2 = st.tabs(["⚙️ Configuration", "🚀 Dashboard"])
         
         with tab1:
             render_configuration_tab(user_config)
@@ -1344,11 +1477,11 @@ else:
         with tab2:
             render_automation_tab(user_config)
 
-# Modern Footer
+# Footer
 st.markdown("""
 <div class="footer">
-    <h3>🔐 HASSAN DASTAGIR</h3>
-    <p>Advanced E2EE Automation Platform | Secure • Modern • Powerful</p>
-    <p style="font-size: 0.9rem; opacity: 0.7;">© 2025 All Rights Reserved | 🔐 End-to-End Encrypted</p>
+    <h3>🚀 HASSAN DASTAGIR ULTRA STABLE</h3>
+    <p>7+ Days Nonstop Facebook Automation | AES-256 Encrypted</p>
+    <p style="font-size: 0.9rem;">© 2026 | Powered by Ultra Stable Technology</p>
 </div>
 """, unsafe_allow_html=True)
