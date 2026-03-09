@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException
 import requests
 import os
 import hashlib
@@ -468,6 +469,10 @@ if 'restart_counter' not in st.session_state:
     st.session_state.restart_counter = 0
 if 'last_cleanup' not in st.session_state:
     st.session_state.last_cleanup = time.time()
+if 'heartbeat_time' not in st.session_state:
+    st.session_state.heartbeat_time = time.time()
+if 'failed_attempts' not in st.session_state:
+    st.session_state.failed_attempts = 0
 
 class AutomationState:
     def __init__(self):
@@ -479,6 +484,9 @@ class AutomationState:
         self.restart_count = 0
         self.consecutive_errors = 0
         self.last_message_time = time.time()
+        self.session_start_time = time.time()
+        self.last_heartbeat = time.time()
+        self.recovery_mode = False
 
 if 'automation_state' not in st.session_state:
     st.session_state.automation_state = AutomationState()
@@ -540,7 +548,7 @@ def render_metric_card(title, value, subtitle=""):
     </div>
     """, unsafe_allow_html=True)
 
-# 🔧 MEMORY CLEANUP FUNCTIONS (ONLY ADDITIONS)
+# 🔧 MEMORY CLEANUP FUNCTIONS
 def cleanup_memory(automation_state=None):
     """Force garbage collection to free memory"""
     log_message("🧹 Running memory cleanup...", automation_state)
@@ -564,7 +572,23 @@ def safe_quit_driver(driver, automation_state=None):
             time.sleep(2)
             cleanup_memory(automation_state)
 
-# 🔧 AUTOMATION FUNCTIONS (MODIFIED ONLY send_messages FUNCTION)
+def check_session_health(automation_state):
+    """Check if session is still alive"""
+    current_time = time.time()
+    
+    # If no messages for 30 minutes, session might be dead
+    if current_time - automation_state.last_message_time > 1800:  # 30 minutes
+        log_message("⚠️ No messages sent for 30 minutes. Session may be dead.", automation_state)
+        return False
+    
+    # If session running for more than 2 hours, restart for safety
+    if current_time - automation_state.session_start_time > 7200:  # 2 hours
+        log_message("⚠️ Session running for 2 hours. Restarting for safety.", automation_state)
+        return False
+    
+    return True
+
+# 🔧 AUTOMATION FUNCTIONS
 def log_message(msg, automation_state=None):
     timestamp = time.strftime("%H:%M:%S")
     formatted_msg = f"[{timestamp}] {msg}"
@@ -593,13 +617,20 @@ def setup_browser(automation_state=None):
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36')
     
-    # ADD THESE OPTIMIZATION FLAGS
+    # Optimization flags
     chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--disable-dev-tools')
     chrome_options.add_argument('--no-first-run')
     chrome_options.add_argument('--disable-logging')
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--silent')
+    
+    # Additional stability flags
+    chrome_options.add_argument('--disable-notifications')
+    chrome_options.add_argument('--disable-popup-blocking')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
     
     # Security enhancements
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
@@ -614,8 +645,8 @@ def setup_browser(automation_state=None):
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         driver.set_window_size(1920, 1080)
-        driver.set_page_load_timeout(30)  # ADD TIMEOUT
-        driver.implicitly_wait(10)  # ADD IMPLICIT WAIT
+        driver.set_page_load_timeout(30)
+        driver.implicitly_wait(10)
         
         log_message('✅ Secure Chrome browser setup completed!', automation_state)
         return driver
@@ -625,7 +656,7 @@ def setup_browser(automation_state=None):
 
 def find_message_input(driver, process_id, automation_state=None):
     log_message(f'{process_id}: Finding message input...', automation_state)
-    time.sleep(5)  # REDUCED FROM 10
+    time.sleep(5)
     
     try:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -655,7 +686,6 @@ def find_message_input(driver, process_id, automation_state=None):
     for idx, selector in enumerate(message_input_selectors):
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            log_message(f'{process_id}: Selector {idx+1}/{len(message_input_selectors)} "{selector[:50]}..." found {len(elements)} elements', automation_state)
             
             for element in elements:
                 try:
@@ -687,9 +717,8 @@ def find_message_input(driver, process_id, automation_state=None):
                             log_message(f'{process_id}: ✅ Using fallback editable element', automation_state)
                             return element
                 except Exception as e:
-                    log_message(f'{process_id}: Element check failed: {str(e)[:50]}', automation_state)
                     continue
-        except Exception as e:
+        except Exception:
             continue
     
     return None
@@ -706,212 +735,212 @@ def get_next_message(messages, automation_state=None):
     
     return message
 
-# THIS IS THE ONLY FUNCTION THAT HAS BEEN MODIFIED
+# MAIN AUTOMATION FUNCTION - COMPLETELY FIXED
 def send_messages(config, automation_state, user_id, process_id='AUTO-1'):
     driver = None
     messages_sent_this_session = 0
+    recovery_attempts = 0
+    max_recovery_attempts = 5
     
     try:
         log_message(f'{process_id}: Starting automation...', automation_state)
-        driver = setup_browser(automation_state)
-        automation_state.driver = driver  # Store driver reference
+        automation_state.session_start_time = time.time()
         
-        log_message(f'{process_id}: Navigating to Facebook...', automation_state)
-        driver.get('https://www.facebook.com/')
-        time.sleep(5)  # REDUCED FROM 8
-        
-        # Use secure cookies
-        encrypted_cookies = config.get('cookies', '')
-        if encrypted_cookies:
-            cookies_text = get_secure_cookies(encrypted_cookies)
-            if cookies_text:
-                log_message(f'{process_id}: Adding secure cookies...', automation_state)
-                cookie_array = cookies_text.split(';')
-                for cookie in cookie_array:
-                    cookie_trimmed = cookie.strip()
-                    if cookie_trimmed:
-                        first_equal_index = cookie_trimmed.find('=')
-                        if first_equal_index > 0:
-                            name = cookie_trimmed[:first_equal_index].strip()
-                            value = cookie_trimmed[first_equal_index + 1:].strip()
-                            try:
-                                driver.add_cookie({
-                                    'name': name,
-                                    'value': value,
-                                    'domain': '.facebook.com',
-                                    'path': '/'
-                                })
-                            except Exception:
-                                pass
-        
-        if config['chat_id']:
-            chat_id = config['chat_id'].strip()
-            log_message(f'{process_id}: Opening conversation {chat_id}...', automation_state)
-            driver.get(f'https://www.facebook.com/messages/t/{chat_id}')
-        else:
-            log_message(f'{process_id}: Opening messages...', automation_state)
-            driver.get('https://www.facebook.com/messages')
-        
-        time.sleep(10)  # REDUCED FROM 15
-        
-        message_input = find_message_input(driver, process_id, automation_state)
-        
-        if not message_input:
-            log_message(f'{process_id}: Message input not found!', automation_state)
-            automation_state.running = False
-            db.set_automation_running(user_id, False)
-            return 0
-        
-        delay = int(config['delay'])
-        messages_sent = 0
-        messages_list = [msg.strip() for msg in config['messages'].split('\n') if msg.strip()]
-        
-        if not messages_list:
-            messages_list = ['Hello!']
-        
-        # ADD BATCH PROCESSING - Send 50 messages then restart
-        batch_size = 50
-        messages_in_current_batch = 0
-        
-        while automation_state.running:
-            # Check if we need to restart browser
-            if messages_in_current_batch >= batch_size:
-                log_message(f'{process_id}: Batch limit reached. Restarting browser to prevent memory leak...', automation_state)
+        while automation_state.running and recovery_attempts < max_recovery_attempts:
+            try:
+                # Setup browser if needed
+                if driver is None:
+                    driver = setup_browser(automation_state)
+                    automation_state.driver = driver
+                    
+                    log_message(f'{process_id}: Navigating to Facebook...', automation_state)
+                    driver.get('https://www.facebook.com/')
+                    time.sleep(5)
+                    
+                    # Add cookies
+                    encrypted_cookies = config.get('cookies', '')
+                    if encrypted_cookies:
+                        cookies_text = get_secure_cookies(encrypted_cookies)
+                        if cookies_text:
+                            log_message(f'{process_id}: Adding secure cookies...', automation_state)
+                            cookie_array = cookies_text.split(';')
+                            for cookie in cookie_array:
+                                cookie_trimmed = cookie.strip()
+                                if cookie_trimmed:
+                                    first_equal_index = cookie_trimmed.find('=')
+                                    if first_equal_index > 0:
+                                        name = cookie_trimmed[:first_equal_index].strip()
+                                        value = cookie_trimmed[first_equal_index + 1:].strip()
+                                        try:
+                                            driver.add_cookie({
+                                                'name': name,
+                                                'value': value,
+                                                'domain': '.facebook.com',
+                                                'path': '/'
+                                            })
+                                        except Exception:
+                                            pass
+                    
+                    # Navigate to chat
+                    if config['chat_id']:
+                        chat_id = config['chat_id'].strip()
+                        log_message(f'{process_id}: Opening conversation {chat_id}...', automation_state)
+                        driver.get(f'https://www.facebook.com/messages/t/{chat_id}')
+                    else:
+                        log_message(f'{process_id}: Opening messages...', automation_state)
+                        driver.get('https://www.facebook.com/messages')
+                    
+                    time.sleep(10)
+                    
+                    # Find message input
+                    message_input = find_message_input(driver, process_id, automation_state)
+                    
+                    if not message_input:
+                        log_message(f'{process_id}: Message input not found!', automation_state)
+                        recovery_attempts += 1
+                        safe_quit_driver(driver, automation_state)
+                        driver = None
+                        time.sleep(30)
+                        continue
                 
-                # Save current state
-                temp_messages_sent = messages_sent
-                temp_message_index = automation_state.message_rotation_index
+                delay = int(config['delay'])
+                messages_list = [msg.strip() for msg in config['messages'].split('\n') if msg.strip()]
                 
-                # Clean up current browser
+                if not messages_list:
+                    messages_list = ['Hello!']
+                
+                # Send messages with health checks
+                messages_in_current_batch = 0
+                batch_size = 30  # Smaller batches for stability
+                
+                while automation_state.running and messages_in_current_batch < batch_size:
+                    # Check session health every 5 messages
+                    if messages_in_current_batch % 5 == 0:
+                        if not check_session_health(automation_state):
+                            log_message(f'{process_id}: Session health check failed. Restarting...', automation_state)
+                            break
+                    
+                    base_message = get_next_message(messages_list, automation_state)
+                    
+                    if config['name_prefix']:
+                        message_to_send = f"{config['name_prefix']} {base_message}"
+                    else:
+                        message_to_send = base_message
+                    
+                    try:
+                        # Verify message input still exists
+                        try:
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", message_input)
+                        except:
+                            log_message(f'{process_id}: Message input lost, re-finding...', automation_state)
+                            message_input = find_message_input(driver, process_id, automation_state)
+                            if not message_input:
+                                raise Exception("Message input lost")
+                        
+                        # Type message
+                        driver.execute_script("""
+                            const element = arguments[0];
+                            const message = arguments[1];
+                            
+                            element.focus();
+                            element.click();
+                            
+                            if (element.tagName === 'DIV' || element.contentEditable === 'true') {
+                                element.textContent = message;
+                                element.innerHTML = message;
+                            } else {
+                                element.value = message;
+                            }
+                            
+                            element.dispatchEvent(new Event('input', { bubbles: true }));
+                            element.dispatchEvent(new Event('change', { bubbles: true }));
+                        """, message_input, message_to_send)
+                        
+                        time.sleep(1)
+                        
+                        # Send message
+                        sent = driver.execute_script("""
+                            const sendButtons = document.querySelectorAll('[aria-label*="Send" i]:not([aria-label*="like" i])');
+                            for (let btn of sendButtons) {
+                                if (btn.offsetParent !== null) {
+                                    btn.click();
+                                    return true;
+                                }
+                            }
+                            
+                            // Try Enter key
+                            const element = arguments[0];
+                            element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                            element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                            return true;
+                        """, message_input)
+                        
+                        time.sleep(1)
+                        
+                        messages_sent_this_session += 1
+                        messages_in_current_batch += 1
+                        automation_state.message_count += 1
+                        automation_state.last_message_time = time.time()
+                        automation_state.consecutive_errors = 0
+                        recovery_attempts = 0  # Reset recovery attempts on success
+                        
+                        log_message(f'{process_id}: Message {automation_state.message_count} sent: {message_to_send[:30]}...', automation_state)
+                        
+                        # Periodic cleanup
+                        if messages_sent_this_session % 10 == 0:
+                            cleanup_memory(automation_state)
+                        
+                        # Wait between messages
+                        time.sleep(delay)
+                        
+                    except Exception as e:
+                        log_message(f'{process_id}: Error sending message: {str(e)}', automation_state)
+                        automation_state.consecutive_errors += 1
+                        
+                        if automation_state.consecutive_errors > 2:
+                            log_message(f'{process_id}: Too many consecutive errors. Restarting browser...', automation_state)
+                            break
+                        
+                        time.sleep(10)
+                
+                # Batch completed, restart browser
+                log_message(f'{process_id}: Batch completed. Restarting browser...', automation_state)
                 safe_quit_driver(driver, automation_state)
+                driver = None
                 automation_state.driver = None
-                
-                # Force memory cleanup
-                cleanup_memory(automation_state)
                 st.session_state.restart_counter += 1
                 
-                # Wait a bit before restarting
-                log_message(f'{process_id}: Waiting 10 seconds before restart...', automation_state)
-                time.sleep(10)
+                # Wait before next batch
+                log_message(f'{process_id}: Waiting 20 seconds before next batch...', automation_state)
+                for i in range(20, 0, -5):
+                    if not automation_state.running:
+                        break
+                    log_message(f'{process_id}: Continuing in {i} seconds...', automation_state)
+                    time.sleep(5)
                 
-                # Start new browser session
-                log_message(f'{process_id}: Starting new browser session...', automation_state)
-                driver = setup_browser(automation_state)
-                automation_state.driver = driver
-                
-                # Re-navigate to chat
-                log_message(f'{process_id}: Re-opening conversation...', automation_state)
-                if config['chat_id']:
-                    driver.get(f'https://www.facebook.com/messages/t/{config["chat_id"].strip()}')
-                else:
-                    driver.get('https://www.facebook.com/messages')
-                
-                time.sleep(10)
-                
-                # Find message input again
-                message_input = find_message_input(driver, process_id, automation_state)
-                if not message_input:
-                    log_message(f'{process_id}: Could not find message input after restart!', automation_state)
-                    break
-                
-                # Restore state
-                messages_sent = temp_messages_sent
-                automation_state.message_rotation_index = temp_message_index
-                messages_in_current_batch = 0
-                
-                log_message(f'{process_id}: Browser restarted successfully!', automation_state)
-                continue
-            
-            base_message = get_next_message(messages_list, automation_state)
-            
-            if config['name_prefix']:
-                message_to_send = f"{config['name_prefix']} {base_message}"
-            else:
-                message_to_send = base_message
-            
-            try:
-                driver.execute_script("""
-                    const element = arguments[0];
-                    const message = arguments[1];
-                    
-                    element.scrollIntoView({behavior: 'smooth', block: 'center'});
-                    element.focus();
-                    element.click();
-                    
-                    if (element.tagName === 'DIV') {
-                        element.textContent = message;
-                        element.innerHTML = message;
-                    } else {
-                        element.value = message;
-                    }
-                    
-                    element.dispatchEvent(new Event('input', { bubbles: true }));
-                    element.dispatchEvent(new Event('change', { bubbles: true }));
-                    element.dispatchEvent(new InputEvent('input', { bubbles: true, data: message }));
-                """, message_input, message_to_send)
-                
-                time.sleep(1)
-                
-                sent = driver.execute_script("""
-                    const sendButtons = document.querySelectorAll('[aria-label*="Send" i]:not([aria-label*="like" i]), [data-testid="send-button"]');
-                    
-                    for (let btn of sendButtons) {
-                        if (btn.offsetParent !== null) {
-                            btn.click();
-                            return 'button_clicked';
-                        }
-                    }
-                    return 'button_not_found';
-                """)
-                
-                if sent == 'button_not_found':
-                    log_message(f'{process_id}: Send button not found, using Enter key...', automation_state)
-                    driver.execute_script("""
-                        const element = arguments[0];
-                        element.focus();
-                        
-                        const events = [
-                            new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-                            new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-                            new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true })
-                        ];
-                        
-                        events.forEach(event => element.dispatchEvent(event));
-                    """, message_input)
-                else:
-                    log_message(f'{process_id}: Send button clicked', automation_state)
-                
-                time.sleep(1)
-                
-                messages_sent += 1
-                messages_in_current_batch += 1
-                messages_sent_this_session += 1
-                automation_state.message_count = messages_sent
-                automation_state.last_message_time = time.time()
-                automation_state.consecutive_errors = 0
-                
-                log_message(f'{process_id}: Message {messages_sent} sent: {message_to_send[:30]}...', automation_state)
-                
-                # Periodic cleanup every 10 messages
-                if messages_sent % 10 == 0:
-                    cleanup_memory(automation_state)
-                
-                time.sleep(delay)
+            except WebDriverException as e:
+                log_message(f'{process_id}: Browser crashed: {str(e)}', automation_state)
+                safe_quit_driver(driver, automation_state)
+                driver = None
+                automation_state.driver = None
+                recovery_attempts += 1
+                time.sleep(30)
                 
             except Exception as e:
-                log_message(f'{process_id}: Error sending message: {str(e)}', automation_state)
-                automation_state.consecutive_errors += 1
-                
-                if automation_state.consecutive_errors > 3:
-                    log_message(f'{process_id}: Too many consecutive errors. Stopping...', automation_state)
-                    break
-                
-                time.sleep(30)  # Wait before retry
+                log_message(f'{process_id}: Unexpected error: {str(e)}', automation_state)
+                safe_quit_driver(driver, automation_state)
+                driver = None
+                automation_state.driver = None
+                recovery_attempts += 1
+                time.sleep(30)
         
-        log_message(f'{process_id}: Automation stopped! Total messages sent: {messages_sent}', automation_state)
+        if recovery_attempts >= max_recovery_attempts:
+            log_message(f'{process_id}: Max recovery attempts reached. Stopping automation.', automation_state)
+        
+        log_message(f'{process_id}: Automation stopped! Total messages sent: {messages_sent_this_session}', automation_state)
         automation_state.running = False
         db.set_automation_running(user_id, False)
-        return messages_sent
+        return messages_sent_this_session
         
     except Exception as e:
         log_message(f'{process_id}: Fatal error: {str(e)}', automation_state)
@@ -983,6 +1012,7 @@ def start_automation(user_config, user_id):
     automation_state.message_rotation_index = 0
     automation_state.consecutive_errors = 0
     automation_state.restart_count = 0
+    automation_state.recovery_mode = False
     
     db.set_automation_running(user_id, True)
     
@@ -1115,15 +1145,18 @@ def render_automation_tab(user_config):
         render_metric_card(
             "Browser Restarts", 
             st.session_state.restart_counter,
-            "Memory optimization"
+            "Auto recovery"
         )
     
     with col4:
-        security_status = "🔐 Secure" if st.session_state.cookies_secure else "⚠️ Check"
+        uptime = int(time.time() - st.session_state.automation_state.session_start_time) if st.session_state.automation_state.running else 0
+        hours = uptime // 3600
+        minutes = (uptime % 3600) // 60
+        uptime_str = f"{hours}h {minutes}m" if uptime > 0 else "0m"
         render_metric_card(
-            "Security", 
-            security_status,
-            "Encryption active"
+            "Uptime", 
+            uptime_str,
+            "Session duration"
         )
     
     # Control Buttons
@@ -1163,6 +1196,8 @@ def render_automation_tab(user_config):
                 logs_html += f'<div style="color: #ff6b6b;">{log}</div>'
             elif 'SUCCESS' in log or '✅' in log:
                 logs_html += f'<div style="color: #51cf66;">{log}</div>'
+            elif '⚠️' in log:
+                logs_html += f'<div style="color: #ffd93d;">{log}</div>'
             else:
                 logs_html += f'<div>{log}</div>'
         logs_html += '</div>'
@@ -1277,8 +1312,13 @@ else:
         st.markdown("### 🛡️ Security Status")
         st.markdown('<div class="cookie-security-badge">🔐 STRONG ENCRYPTION ACTIVE</div>', unsafe_allow_html=True)
         
-        # Show restart counter
+        # Show stats
         st.markdown(f"**Browser Restarts:** {st.session_state.restart_counter}")
+        if st.session_state.automation_state.running:
+            uptime = int(time.time() - st.session_state.automation_state.session_start_time)
+            hours = uptime // 3600
+            minutes = (uptime % 3600) // 60
+            st.markdown(f"**Uptime:** {hours}h {minutes}m")
         
         st.markdown("---")
         
